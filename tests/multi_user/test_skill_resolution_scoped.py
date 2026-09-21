@@ -68,18 +68,18 @@ def test_admin_skip_grant_check(mu_isolated_root, as_user):
         assert_skill_allowed("anything")
 
 
-def test_assigned_skills_follow_admin_system_workspace_move(mu_isolated_root, as_user):
-    from types import SimpleNamespace
-
-    from deeptutor.multi_user.context import user_from_token_payload
+def test_assigned_skills_follow_admin_system_workspace_move(
+    mu_isolated_root, as_user, make_user
+):
     from deeptutor.multi_user.paths import user_context
     from deeptutor.services.skill.service import get_admin_skill_service, get_skill_service
     from deeptutor.services.workspace import ContentWorkspaceService
 
-    # Admin account tokens share the canonical admin scope and system root.
-    admin = user_from_token_payload(
-        SimpleNamespace(user_id="account-admin", username="admin", role="admin")
-    )
+    # Admin accounts share the canonical admin scope and system root.  Built
+    # through the same fixture as every other identity: a TokenPayload with an
+    # admin claim for an unknown account is rejected by design (stale-claim
+    # fail-closed), so tests must not mint admins through that boundary.
+    admin = make_user("account-admin", role="admin")
     with user_context(admin):
         skills = get_skill_service()
         _write_skill(skills.root, "moved-skill", "Read the new location.")

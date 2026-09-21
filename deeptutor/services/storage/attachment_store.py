@@ -271,14 +271,16 @@ def get_attachment_store() -> AttachmentStore:
 def _attachment_root() -> Path:
     # ``system.json`` is deployment/admin configuration.  Never let a normal
     # account turn that absolute override into a shared attachment root; its
-    # store is always derived from the request-scoped user PathService.
+    # store is always derived from the request-scoped user PathService.  A
+    # selected workspace always owns its attachments, even for the admin, so
+    # workspace migration can move files out of the legacy root.
     from deeptutor.multi_user.context import get_current_user
+    from deeptutor.services.workspace.context import current_workspace_id
 
     user = get_current_user()
-    if user.is_admin:
-        override = str(load_system_settings().get("chat_attachment_dir") or "").strip()
-        if override:
-            return Path(override).expanduser().resolve()
+    override = str(load_system_settings().get("chat_attachment_dir") or "").strip()
+    if user.is_admin and override and not current_workspace_id():
+        return Path(override).expanduser().resolve()
     path_service = get_path_service()
     raw_root = path_service.get_user_root().joinpath(*_DEFAULT_SUBPATH)
     # Validate the lexical components before any ``resolve()`` call.  A

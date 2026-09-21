@@ -22,6 +22,11 @@ async def test_start_turn_preserves_workspace_and_parent_field_presence(monkeypa
             captured.append(payload)
             return {"id": "chat"}, {"id": "turn"}
 
+        async def get_turn(self, _turn_id):
+            # The unified WS adapter checks turn ownership in the caller's
+            # store before subscribing (isolation invariant 4).
+            return {"id": "turn", "status": "running"}
+
         async def subscribe_turn(self, *_args, **_kwargs):
             if False:
                 yield None

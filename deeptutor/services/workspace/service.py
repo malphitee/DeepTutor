@@ -101,8 +101,17 @@ class ContentWorkspaceService(WorkspaceCatalogMixin):
         return Path(raw).expanduser().resolve() if raw else None
 
     def _allowed_roots(self) -> tuple[Path, ...]:
-        if not get_current_user().is_admin:
-            return (self._default_root(),)
+        user = get_current_user()
+        if not user.is_admin:
+            # Configured roots are deployment-wide.  A regular account may use
+            # one only when it is a subdirectory of its own scoped root; its
+            # catalog trees (managed workspaces, session artifacts) are derived
+            # from the same scoped root, so they stay inside the boundary.
+            return (
+                self._default_root(),
+                self._managed_root().resolve(),
+                self._session_root().resolve(),
+            )
         raw = os.environ.get(_ALLOWED_ROOTS_ENV, "")
         roots = [
             Path(value).expanduser().resolve() for value in raw.split(os.pathsep) if value.strip()
