@@ -27,7 +27,9 @@ Entry Points:  CLI (Typer)  |  WebSocket /ws  |  Python SDK
 All capabilities emit on a shared `StreamBus`; the orchestrator fans
 events out to consumers. Runtime settings live in
 `data/user/settings/*.json` — project-root `.env` files are intentionally
-ignored.
+ignored. The one sanctioned exception is Docker/CI deployment injection of
+integration-process env vars via the narrow `INTEGRATION_PROCESS_OVERRIDE_KEYS`
+allowlist (see `CONTAINERIZATION.md`).
 
 ### Level 1 — Tools
 
