@@ -177,5 +177,5 @@ data/
 
 阶段 0 与阶段 6 的文档交付物：
 
-- 测试矩阵（不变量 → 测试映射 + 缺口表）：`docs/user-isolation-test-matrix.md`
-- 部署文档（反向代理/TLS/secure cookie/密钥注入/备份恢复 + A/B 验证手册）：`docs/user-isolation-deployment.md`
+- 测试矩阵（不变量 → 测试映射 + 缺口表）：`user-isolation-test-matrix.md`
+- 部署文档（反向代理/TLS/secure cookie/密钥注入/备份恢复 + A/B 验证手册）：`user-isolation-deployment.md`

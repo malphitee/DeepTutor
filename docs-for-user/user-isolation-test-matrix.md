@@ -1,6 +1,6 @@
 # 用户隔离测试矩阵（阶段 0 交付物）
 
-对应 `docs/user-isolation-development-plan.md` 阶段 0 的要求：为安全不变量建立
+对应 `user-isolation-development-plan.md` 阶段 0 的要求：为安全不变量建立
 测试矩阵，标记现有覆盖与缺口。测试本体随阶段 1–5 落地，本表是它们与计划的
 对照索引。运行方式：`pytest -q tests`（CI 配置见 `.github/workflows/tests.yml`）。
 
@@ -42,7 +42,7 @@ role 保留）。启动隔离模式声明：`tests/multi_user/test_isolation_mod
 
 | # | 缺口 | 说明 |
 | --- | --- | --- |
-| G1 | Docker A/B 端到端冒烟（阶段 7） | 需要构建镜像 + 双账号浏览器流程，未自动化；部署侧操作手册见 `docs/user-isolation-deployment.md` §2 |
+| G1 | Docker A/B 端到端冒烟（阶段 7） | 需要构建镜像 + 双账号浏览器流程，未自动化；部署侧操作手册见 `user-isolation-deployment.md` §2 |
 | G2 | 前端类型检查与架构检查 | 属阶段 7；Python 侧 `compileall`/`git diff --check` 已纳入流程 |
 | G3 | WS 断连级集成测试 | revocation 的 token 失效与 fan-out 有单元覆盖；"禁用后既有 WebSocket 被服务端关闭"的端到端用例依赖真实 WS 握手，未单列 |
 | G4 | 跨模块私有调用待公开化 | `manager._load_config()`、`PathService._scoped_path()`、`_terminate_revoked_user` 等 5 处（见 review 记录）；行为有测试覆盖，API 归位待定 |

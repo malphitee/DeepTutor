@@ -1,8 +1,8 @@
 # 多用户隔离部署指南（Phase 6）
 
-对应 `docs/user-isolation-development-plan.md` 阶段 6 的部署要求：反向代理、TLS、
+对应 `user-isolation-development-plan.md` 阶段 6 的部署要求：反向代理、TLS、
 secure cookie、密钥注入、备份与恢复。容器运行机制（镜像、端口、卷、rootless
-Podman）见 [CONTAINERIZATION.md](../CONTAINERIZATION.md)，本文只讲与用户隔离
+Podman）见 [CONTAINERIZATION.md](CONTAINERIZATION.md)，本文只讲与用户隔离
 直接相关的部署决策。
 
 ## 1. 隔离模式与启动自检
