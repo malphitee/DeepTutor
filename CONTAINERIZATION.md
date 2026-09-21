@@ -387,9 +387,10 @@ removes that dependency on the `/var/run` owner and mode entirely.
 Almost everything you tune lives under `data/user/settings/` inside the
 data tree. The container entrypoint unsets a list of related env vars
 (`BACKEND_PORT`, `FRONTEND_PORT`, `NEXT_PUBLIC_API_BASE`,
-`NEXT_PUBLIC_API_BASE_EXTERNAL`, `AUTH_ENABLED`, `POCKETBASE_URL`, etc.)
-on every start and re-exports values from the JSONs. So: edit the JSONs,
-restart, do **not** try to drive these with compose env vars.
+`NEXT_PUBLIC_API_BASE_EXTERNAL`, `AUTH_ENABLED`, etc.) on every start and
+re-exports values from the JSONs. The Compose manifests explicitly forward the
+small middleware allowlist documented below; those variables are the only
+deployment overrides.
 
 | File | Purpose |
 |:---|:---|
@@ -417,6 +418,26 @@ The two settings most relevant to a fresh install:
 Project-root `.env` files are intentionally ignored as application
 config. The Web **Settings** page is the recommended editor for the
 JSON/YAML files; deep links to each section live in the page sidebar.
+
+The Compose manifests provide one explicit deployment exception for shared
+middleware. Set these variables before starting Compose and they override only
+the matching fields in `integrations.json` for that container process:
+
+```bash
+DEEPTUTOR_TURN_COORDINATION_BACKEND=redis \
+DEEPTUTOR_REDIS_URL='redis://:password@redis.example:6379/0' \
+DEEPTUTOR_REDIS_KEY_PREFIX=deeptutor-prod \
+POCKETBASE_URL='http://pocketbase.example:8090' \
+  python scripts/docker_compose.py up -d
+```
+
+The supported names are `DEEPTUTOR_TURN_COORDINATION_BACKEND`,
+`DEEPTUTOR_REDIS_URL`, `DEEPTUTOR_REDIS_KEY_PREFIX`, `POCKETBASE_URL`,
+`POCKETBASE_PORT`, `POCKETBASE_EXTERNAL_URL`, `POCKETBASE_ADMIN_EMAIL`, and
+`POCKETBASE_ADMIN_PASSWORD`. Other environment variables remain ignored by the
+Docker entrypoint, so ports, auth, paths, and user-facing settings continue to
+come from the JSON files. The bundled Redis sidecar still starts; use a Compose
+override or profile if an external Redis deployment should replace it.
 
 ---
 

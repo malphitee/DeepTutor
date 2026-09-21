@@ -31,6 +31,10 @@ RUNTIME_ENV_KEYS = (
     "POCKETBASE_EXTERNAL_URL",
     "POCKETBASE_ADMIN_EMAIL",
     "POCKETBASE_ADMIN_PASSWORD",
+    "DEEPTUTOR_TURN_COORDINATION_BACKEND",
+    "DEEPTUTOR_REDIS_URL",
+    "DEEPTUTOR_REDIS_KEY_PREFIX",
+    "DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES",
 )
 
 
@@ -120,6 +124,48 @@ def test_runtime_process_env_is_explicit_override(tmp_path: Path) -> None:
     assert service.load_integrations()["pocketbase_port"] == 9090
     assert _read_json(service.path_for("system"))["backend_port"] == 8001
     assert _read_json(service.path_for("auth"))["enabled"] is False
+
+
+def test_docker_mode_allows_only_explicit_integration_overrides(tmp_path: Path) -> None:
+    service = RuntimeSettingsService(
+        tmp_path / "settings",
+        process_env={
+            "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES": "1",
+            "DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES": "1",
+            "DEEPTUTOR_TURN_COORDINATION_BACKEND": "redis",
+            "DEEPTUTOR_REDIS_URL": "redis://:secret@broker.internal:6379/4",
+            "BACKEND_PORT": "9999",
+        },
+    )
+    service.save_system({"backend_port": 8001})
+    service.save_integrations(
+        {
+            "turn_coordination": {
+                "backend": "memory",
+                "redis_url": "",
+                "key_prefix": "from-json",
+            }
+        }
+    )
+
+    assert service.load_system()["backend_port"] == 8001
+    coordination = service.load_integrations()["turn_coordination"]
+    assert coordination["backend"] == "redis"
+    assert coordination["redis_url"] == "redis://:secret@broker.internal:6379/4"
+    assert coordination["key_prefix"] == "from-json"
+
+
+def test_docker_mode_keeps_integration_env_overrides_opt_in(tmp_path: Path) -> None:
+    service = RuntimeSettingsService(
+        tmp_path / "settings",
+        process_env={
+            "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES": "1",
+            "DEEPTUTOR_REDIS_URL": "redis://broker.internal:6379/4",
+        },
+    )
+    service.save_integrations({"turn_coordination": {"redis_url": ""}})
+
+    assert service.load_integrations()["turn_coordination"]["redis_url"] == ""
     assert _read_json(service.path_for("integrations"))["pocketbase_port"] == 8090
 
 

@@ -98,6 +98,18 @@ services:
       - "${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}:/workspace"
 
     environment:
+      # Integration endpoints may come from the deployment environment.  The
+      # image keeps all other runtime settings JSON-driven; only these
+      # explicitly listed middleware variables are forwarded.
+      - DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES=${DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES:-1}
+      - DEEPTUTOR_TURN_COORDINATION_BACKEND=${DEEPTUTOR_TURN_COORDINATION_BACKEND:-}
+      - DEEPTUTOR_REDIS_URL=${DEEPTUTOR_REDIS_URL:-}
+      - DEEPTUTOR_REDIS_KEY_PREFIX=${DEEPTUTOR_REDIS_KEY_PREFIX:-}
+      - POCKETBASE_URL=${POCKETBASE_URL:-}
+      - POCKETBASE_PORT=${POCKETBASE_PORT:-}
+      - POCKETBASE_EXTERNAL_URL=${POCKETBASE_EXTERNAL_URL:-}
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:-}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:-}
       # Route untrusted shell exec to the runner sidecar (SYSTEM isolation).
       # When this is set, the main app NEVER runs untrusted code in its own
       # process — see deeptutor/services/sandbox/config.py:build_backend().

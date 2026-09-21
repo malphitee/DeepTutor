@@ -133,9 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     for key in (
         "BACKEND_PORT",
         "FRONTEND_PORT",
-        "POCKETBASE_PORT",
         "AUTH_ENABLED",
-        "POCKETBASE_URL",
         "NEXT_PUBLIC_API_BASE",
         "NEXT_PUBLIC_API_BASE_EXTERNAL",
     ):

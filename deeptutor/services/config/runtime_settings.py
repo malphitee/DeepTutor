@@ -104,6 +104,25 @@ DEFAULT_INTEGRATIONS_SETTINGS: dict[str, Any] = {
     },
 }
 
+# Deployment-only integration overrides.  Docker images keep the rest of the
+# runtime configuration JSON-driven, but operators commonly provide broker
+# endpoints and credentials through their secret manager.  Keep this allowlist
+# narrow so an arbitrary host environment cannot silently replace auth, paths,
+# ports, or user-facing settings.
+INTEGRATION_PROCESS_OVERRIDE_KEYS = frozenset(
+    {
+        "POCKETBASE_URL",
+        "POCKETBASE_PORT",
+        "POCKETBASE_EXTERNAL_URL",
+        "POCKETBASE_ADMIN_EMAIL",
+        "POCKETBASE_ADMIN_PASSWORD",
+        "DEEPTUTOR_TURN_COORDINATION_BACKEND",
+        "DEEPTUTOR_REDIS_URL",
+        "DEEPTUTOR_REDIS_KEY_PREFIX",
+    }
+)
+INTEGRATION_PROCESS_OVERRIDE_SWITCH = "DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES"
+
 # Document parsing settings. The parse layer (deeptutor/services/parsing)
 # supports several pluggable engines; one is active at a time. The persisted
 # shape is v2::
@@ -715,7 +734,12 @@ class RuntimeSettingsService:
         return env
 
     def _process_env_value(self, key: str) -> str:
-        if self._ignore_process_overrides():
+        if self._ignore_process_overrides() and not (
+            key in INTEGRATION_PROCESS_OVERRIDE_KEYS
+            and _coerce_bool(
+                self.process_env.get(INTEGRATION_PROCESS_OVERRIDE_SWITCH), False
+            )
+        ):
             return ""
         value = self.process_env.get(key, "")
         if not value:
@@ -1415,6 +1439,8 @@ __all__ = [
     "DEFAULT_GRAPHRAG_SETTINGS",
     "DEFAULT_IMA_SETTINGS",
     "DEFAULT_INTEGRATIONS_SETTINGS",
+    "INTEGRATION_PROCESS_OVERRIDE_KEYS",
+    "INTEGRATION_PROCESS_OVERRIDE_SWITCH",
     "DEFAULT_LIGHTRAG_SETTINGS",
     "DEFAULT_LIGHTRAG_SERVER_SETTINGS",
     "DEFAULT_LLAMAINDEX_SETTINGS",

@@ -113,6 +113,22 @@ def test_compose_files_do_not_consume_legacy_env_names() -> None:
         assert "DEEPTUTOR_DOCKER_BACKEND_PORT" in content
 
 
+def test_compose_files_forward_only_explicit_middleware_env_names() -> None:
+    root = Path(__file__).resolve().parents[2]
+    required = (
+        "DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES",
+        "DEEPTUTOR_TURN_COORDINATION_BACKEND",
+        "DEEPTUTOR_REDIS_URL",
+        "DEEPTUTOR_REDIS_KEY_PREFIX",
+        "POCKETBASE_URL",
+        "POCKETBASE_ADMIN_PASSWORD",
+    )
+    for name in ("docker-compose.yml", "docker-compose.ghcr.yml", "compose.yaml"):
+        source = (root / name).read_text(encoding="utf-8")
+        for key in required:
+            assert f"{key}=" in source, (name, key)
+
+
 def _compose_service(root: Path, name: str) -> dict:
     content = yaml.safe_load((root / name).read_text(encoding="utf-8"))
     return content["services"]["deeptutor"]

@@ -391,6 +391,14 @@ running `python scripts/docker_compose.py up -d`. When omitted it uses
 `./data/user/workspace`. Docker paths are selected at startup and therefore
 appear locked in the Web settings page.
 
+Compose also supports deployment-time middleware overrides. For example,
+`DEEPTUTOR_TURN_COORDINATION_BACKEND=redis DEEPTUTOR_REDIS_URL=redis://redis:6379/0`
+selects Redis coordination without editing the persisted settings file. The
+allowlist covers Redis coordination and PocketBase endpoint/credential
+variables; ports, auth, paths, and other runtime settings remain JSON-backed.
+See [CONTAINERIZATION.md](./CONTAINERIZATION.md#runtime-configuration) for the
+full list.
+
 > **Only `3782` needs to be published.** The browser talks exclusively to the frontend origin; the Next.js middleware (`web/proxy.ts`) forwards `/api/*` and `/ws/*` to the FastAPI backend **inside the container**. Publishing `8001` (`-p 127.0.0.1:8001:8001`) is optional — handy only for hitting the API directly with curl or scripts.
 
 Open [http://127.0.0.1:3782](http://127.0.0.1:3782). The container creates `/app/data/user/settings/*.json` on first boot; configure model providers from the Web Settings page. Config, API keys, logs, the default Content Workspace, memory, and knowledge bases persist in the `deeptutor-data` volume. A separately mounted Content Workspace persists at its host path instead. Optional extras belong on the deployment, not in a shell: set `DEEPTUTOR_EXTRAS` (and `DEEPTUTOR_APT_PACKAGES` for system libraries) and every container started from it re-applies them, where a `docker exec … pip install` would be lost at the next `compose down`.
