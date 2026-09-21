@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from deeptutor.logging import configure_logging
+from deeptutor.multi_user.request_scope import UserScopeMiddleware
 from deeptutor.services.config import (
     ensure_runtime_settings_files,
     export_runtime_settings_to_env,
@@ -16,7 +17,6 @@ from deeptutor.services.config import (
 )
 from deeptutor.services.config.origins import normalize_origins
 from deeptutor.services.path_service import get_path_service
-from deeptutor.multi_user.request_scope import UserScopeMiddleware
 
 ensure_runtime_settings_files()
 export_runtime_settings_to_env(overwrite=True)
@@ -115,9 +115,12 @@ async def lifespan(app: FastAPI):
     # The built-in identity store is the isolation boundary.  Refuse to start
     # a multi-user process that still points session/auth traffic at the old
     # shared PocketBase control plane.
-    from deeptutor.services.auth import assert_supported_backend
+    from deeptutor.services.auth import assert_supported_backend, log_isolation_mode
 
     assert_supported_backend()
+    # Announce which posture actually booted so a single-user compatibility
+    # deployment cannot be mistaken for the isolated multi-user mode.
+    log_isolation_mode()
 
     # Validate configuration consistency
     validate_tool_consistency()
