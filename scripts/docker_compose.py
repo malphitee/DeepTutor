@@ -81,11 +81,14 @@ def _compose_command(args: list[str]) -> list[str]:
     # rootless Podman variant and deliberately has no sandbox-runner sidecar.
     # Pin the Docker file here so the wrapper always starts the multi-user
     # deployment described by docker-compose.yml.
+    has_explicit_file = any(
+        value in {"-f", "--file"} or value.startswith("--file=") for value in args
+    )
+    compose_file_args = [] if has_explicit_file else ["-f", str(DOCKER_COMPOSE_FILE)]
     return [
         docker,
         "compose",
-        "-f",
-        str(DOCKER_COMPOSE_FILE),
+        *compose_file_args,
         "--env-file",
         str(DOCKER_ENV_PATH),
         *args,

@@ -82,6 +82,15 @@ def test_docker_wrapper_selects_the_docker_compose_file() -> None:
     assert command[command.index("--env-file") + 1] == str(module.DOCKER_ENV_PATH)
 
 
+def test_docker_wrapper_preserves_an_explicit_compose_file() -> None:
+    module = _load_module()
+
+    command = module._compose_command(["-f", "docker-compose.ghcr.yml", "up", "-d"])
+
+    assert str(module.DOCKER_COMPOSE_FILE) not in command
+    assert command[command.index("-f") + 1] == "docker-compose.ghcr.yml"
+
+
 def test_compose_maps_one_stable_content_workspace() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "docker-compose.yml").read_text(encoding="utf-8")
