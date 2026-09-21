@@ -101,12 +101,14 @@ def log_isolation_mode() -> None:
     A single-user compatibility deployment must be distinguishable from a
     multi-user isolated one in the startup log, so an operator cannot mistake
     a shared-workspace configuration for the isolated multi-user mode
-    (user-isolation plan, Phase 6).
+    (user-isolation plan, Phase 6).  The compatibility posture logs at
+    WARNING because the shipped default log level is WARNING and that is
+    exactly the posture an operator must not mistake for isolation.
     """
     import os
 
     if not AUTH_ENABLED:
-        logger.info(
+        logger.warning(
             "Isolation mode: single-user compatibility — authentication is disabled; "
             "every request runs as the local admin over the shared data/ workspace"
         )

@@ -9,14 +9,20 @@ from deeptutor.services import auth as auth_service
 
 def test_auth_disabled_announces_single_user_compatibility(caplog, monkeypatch) -> None:
     monkeypatch.setattr(auth_service, "AUTH_ENABLED", False)
-    with caplog.at_level(logging.INFO, logger="deeptutor.services.auth"):
+    with caplog.at_level(logging.WARNING, logger="deeptutor.services.auth"):
         auth_service.log_isolation_mode()
 
-    message = next(
-        (record.message for record in caplog.records if "Isolation mode" in record.message),
-        None,
+    warnings = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "Isolation mode" in record.message
+    ]
+    assert warnings, (
+        "the compatibility posture must log at WARNING: the shipped default log "
+        "level is WARNING and this is the posture operators must not mistake "
+        "for isolation"
     )
-    assert message is not None
+    message = warnings[0]
     assert "single-user compatibility" in message
     assert "multi-user" not in message
 

@@ -13,20 +13,22 @@ Podman）见 [CONTAINERIZATION.md](CONTAINERIZATION.md)，本文只讲与用户�
    误配置直接拒绝启动（`deeptutor/services/auth.py`）。
 2. `log_isolation_mode()` —— 在启动日志里声明当前隔离姿态：
 
-| 启动日志 | 含义 |
-| --- | --- |
-| `Isolation mode: single-user compatibility` | 认证关闭：所有请求以本地管理员身份运行在共享 `data/` 工作区。**这不是安全的多用户模式**。 |
-| `Isolation mode: multi-user isolated` | 认证开启：每个账号的工作区隔离在 `data/users/<user_id>/` 下。 |
-| `DEEPTUTOR_WORKSPACE_ROOT=... is a deployment-wide shared root`（WARNING） | 认证开启但同时配置了部署级共享根。该根只对管理员可达，绝不能当作每用户工作区使用。 |
+| 启动日志 | 级别 | 含义 |
+| --- | --- | --- |
+| `Isolation mode: single-user compatibility` | **WARNING** | 认证关闭：所有请求以本地管理员身份运行在共享 `data/` 工作区。**这不是安全的多用户模式**。默认日志级别（WARNING）下即可见。 |
+| `Isolation mode: multi-user isolated` | INFO | 认证开启：每个账号的工作区隔离在 `data/users/<user_id>/` 下。需 `main.yaml` 设 `logging.level: INFO` 才显示。 |
+| `DEEPTUTOR_WORKSPACE_ROOT=... is a deployment-wide shared root` | WARNING | 认证开启但同时配置了部署级共享根。该根只对管理员可达，绝不能当作每用户工作区使用。 |
 
-生产多用户部署的验收标准之一：日志里必须出现 `multi-user isolated`。
+生产多用户部署的验收标准之一：日志里**不得出现** `single-user compatibility` 的
+WARNING；需要确认 isolated 姿态时把 `main.yaml` 的 `logging.level` 临时调到
+`INFO` 重启查看。
 
 ## 2. 从空目录启动并完成 A/B 隔离验证
 
 ```bash
 mkdir -p data/user/settings
 cat > data/user/settings/auth.json <<'JSON'
-{ "auth_enabled": true }
+{ "version": 1, "enabled": true }
 JSON
 # 用 docker：DEEPTUTOR_WORKSPACE_HOST 必须是绝对路径
 python scripts/docker_compose.py -f docker-compose.yml up -d
@@ -65,7 +67,7 @@ bootstrap 管理员）。然后：
 （`deeptutor/services/config/runtime_settings.py` 的默认值：
 
 ```json
-{ "auth_enabled": true, "cookie_secure": true, "token_expire_hours": 24 }
+{ "version": 1, "enabled": true, "cookie_secure": true, "token_expire_hours": 24 }
 ```
 
 - `cookie_secure: true` 时 cookie 带 `Secure` 且 `SameSite=None`；为 `false`
