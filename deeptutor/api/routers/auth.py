@@ -365,7 +365,18 @@ async def require_auth(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    _install_current_user(payload)
+    try:
+        _install_current_user(payload)
+    except PermissionError as exc:
+        # The second identity boundary (disabled/deleted account, stale role
+        # claim) rejected a token that was cryptographically valid. That is an
+        # authentication failure — the client must re-login — not a server
+        # error, and it must never surface as a 500.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
     return payload
 
 
@@ -406,7 +417,14 @@ async def ws_require_auth(ws: WebSocket) -> _CtxToken | _WsAuthFailed:
         await ws.close(code=4001)
         return ws_auth_failed
 
-    context_token = _install_current_user(payload)
+    try:
+        context_token = _install_current_user(payload)
+    except PermissionError:
+        # Cryptographically valid token rejected by the identity boundary
+        # (disabled/deleted account, stale role claim): same handling as an
+        # undecodable token — the socket is rejected, never a server error.
+        await ws.close(code=4001)
+        return ws_auth_failed
     # Keep every authenticated WebSocket revocable, including legacy progress,
     # book, question, and mastery sockets that do not use the unified-turn
     # adapter.  The request-scope middleware performs the matching cleanup

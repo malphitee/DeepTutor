@@ -164,6 +164,35 @@ def test_require_auth_propagates_admin_contextvar_to_endpoint(monkeypatch) -> No
     assert resp.json() == {"role": "admin"}
 
 
+def test_require_auth_returns_401_for_identity_rejected_token(monkeypatch) -> None:
+    """A cryptographically valid token rejected by the identity boundary must
+    surface as 401 (re-login), never as a 500 from the error boundary."""
+    from deeptutor.api.routers import auth as auth_router
+    from deeptutor.services.auth import TokenPayload
+
+    monkeypatch.setattr(auth_router, "AUTH_ENABLED", True)
+    monkeypatch.setattr(
+        auth_router,
+        "decode_token",
+        lambda _t: TokenPayload(username="ghost", role="admin", user_id="u_ghost"),
+    )
+    monkeypatch.setattr("deeptutor.multi_user.identity.get_user_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.account_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.POCKETBASE_ENABLED", False)
+
+    app = FastAPI()
+
+    @app.get("/whoami")
+    async def whoami(_=Depends(auth_router.require_auth)) -> dict:
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        resp = client.get("/whoami", headers={"Authorization": "Bearer test-token"})
+
+    assert resp.status_code == 401
+    assert "detail" in resp.json()
+
+
 def test_install_current_user_rejects_admin_claim_for_unknown_account(monkeypatch) -> None:
     """An admin role claim for an account with no record must fail closed.
 
