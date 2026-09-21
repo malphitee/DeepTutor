@@ -4,7 +4,7 @@
 
 ## 1. 已确定的产品边界
 
-- 采用一个 DeepTutor 服务实例，不引入 PocketBase 或第二套控制平面。
+- 采用一个 DeepTutor 服务实例，**多用户隔离路径不引入 PocketBase 或第二套控制平面**。理由：本方案的隔离核心在文件系统与进程层（`CurrentUser → PathService` 的路径 scope、per-scope SQLite、grant 体系、`token_version` 即时吊销），PocketBase 只能覆盖账号认证与表级 ACL，且其 auth-refresh 缓存（60s/worker）会把不变量 6 的"立即吊销"退化为有界延迟。PocketBase 作为遗留单用户兼容模式保留：compose 中 profile 默认关闭、env 转发需显式设置 `DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES`，与内置多用户认证互斥——同时开启时 `assert_supported_backend()` 直接拒绝启动。若未来确需外部身份源，优先评估标准 OIDC 接入而非维护 PB sidecar。
 - 保留现有的 `identity.py`、`auth.py`、`CurrentUser`、`UserScope`、`PathService`、`SessionStore` 和 grant 机制；二次开发集中在隔离 seam 和薄适配层。
 - 系统只有一个管理员角色。普通用户只能访问自己的数据；共享知识库、管理员数据和其他用户数据都必须经过显式授权。
 - 默认使用现有 JSON/SQLite 存储。用户规模明显增长后，再把用户目录和会话适配器替换为数据库实现。
