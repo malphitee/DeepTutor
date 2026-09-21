@@ -73,6 +73,15 @@ def test_workspace_host_prepares_nested_outputs(tmp_path: Path) -> None:
     assert (root / "outputs").is_dir()
 
 
+def test_docker_wrapper_selects_the_docker_compose_file() -> None:
+    module = _load_module()
+
+    command = module._compose_command(["config", "-q"])
+
+    assert command[command.index("-f") + 1] == str(module.DOCKER_COMPOSE_FILE)
+    assert command[command.index("--env-file") + 1] == str(module.DOCKER_ENV_PATH)
+
+
 def test_compose_maps_one_stable_content_workspace() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "docker-compose.yml").read_text(encoding="utf-8")

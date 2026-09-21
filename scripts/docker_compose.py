@@ -20,6 +20,7 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SETTINGS_DIR = PROJECT_ROOT / "data" / "user" / "settings"
 DOCKER_ENV_PATH = SETTINGS_DIR / "docker.env"
+DOCKER_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 
 DEFAULT_BACKEND_PORT = 8001
 DEFAULT_FRONTEND_PORT = 3782
@@ -75,7 +76,20 @@ def _compose_command(args: list[str]) -> list[str]:
     docker = shutil.which("docker")
     if not docker:
         raise SystemExit("docker was not found on PATH")
-    return [docker, "compose", "--env-file", str(DOCKER_ENV_PATH), *args]
+    # Both Docker and Podman compose files live at the repository root. Docker
+    # Compose otherwise prefers ``compose.yaml`` by filename, which is the
+    # rootless Podman variant and deliberately has no sandbox-runner sidecar.
+    # Pin the Docker file here so the wrapper always starts the multi-user
+    # deployment described by docker-compose.yml.
+    return [
+        docker,
+        "compose",
+        "-f",
+        str(DOCKER_COMPOSE_FILE),
+        "--env-file",
+        str(DOCKER_ENV_PATH),
+        *args,
+    ]
 
 
 def ensure_workspace_host(raw_path: str | None = None) -> Path:
