@@ -54,10 +54,25 @@ def get_backend(kind: str) -> SubagentBackend | None:
 
 
 def _detectable_backends() -> list[SubagentBackend]:
+    # Local CLI detection executes binaries (``--version``).  In a scoped
+    # ordinary-user request, omit those backends entirely; returning an
+    # ``unavailable`` row after attempting the probe would still be too late.
+    try:
+        from deeptutor.multi_user.context import get_current_user
+
+        ordinary_user = not get_current_user().is_admin
+    except Exception:
+        # A missing/broken request scope must not widen discovery.  Startup and
+        # local CLI callers have the compatibility admin identity and continue
+        # through the normal path.
+        ordinary_user = False
     return [
         backend
         for backend in _BACKENDS.values()
-        if getattr(backend, "local_cli", True) or getattr(backend, "detectable", False)
+        if (
+            (not ordinary_user or not getattr(backend, "local_cli", True))
+            and (getattr(backend, "local_cli", True) or getattr(backend, "detectable", False))
+        )
     ]
 
 

@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-from deeptutor.multi_user.context import get_current_user
+from deeptutor.multi_user.context import get_current_user, request_scope_active
+from deeptutor.multi_user.paths import get_admin_path_service
 from deeptutor.multi_user.model_access import allowed_llm_options
 from deeptutor.services.codebuddy_auth import get_codebuddy_auth_service
 from deeptutor.services.codex_auth import (
@@ -90,6 +91,10 @@ def get_enabled_optional_tools() -> list[str]:
 
 def _settings_file():
     return get_path_service().get_settings_file("interface")
+
+
+def _public_settings_file():
+    return get_admin_path_service().get_settings_file("interface")
 
 
 def _tour_cache_file():
@@ -404,8 +409,16 @@ def _runtime_catalog_write() -> Iterator[None]:
     reset_embedding_client()
 
 
-def load_ui_settings() -> dict[str, Any]:
-    settings_file = _settings_file()
+def load_ui_settings(*, public: bool = False) -> dict[str, Any]:
+    # The pre-session endpoint is intentionally unauthenticated.  It may read
+    # only the deployment's non-sensitive bootstrap presentation settings and
+    # must use an explicit admin path rather than relying on a request fallback.
+    # Production requests pass through UserScopeMiddleware. Small router-only
+    # callers/tests do not, so preserve their injectable settings file while
+    # still making the real anonymous endpoint read the explicit admin file.
+    settings_file = (
+        _public_settings_file() if public and request_scope_active() else _settings_file()
+    )
     if settings_file.exists():
         try:
             with open(settings_file, encoding="utf-8") as handle:
@@ -1721,7 +1734,7 @@ async def get_ui_settings():
     chat_response_timeout, …) describes what the deployment has turned on, so
     it stays behind auth: read it from the ``ui`` key of GET /settings.
     """
-    settings = load_ui_settings()
+    settings = load_ui_settings(public=True)
     return {field: settings.get(field) for field in PRESESSION_UI_FIELDS}
 
 

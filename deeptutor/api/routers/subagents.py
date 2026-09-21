@@ -89,7 +89,12 @@ async def sync_backend(kind: str):
     if backend is None or not getattr(backend, "local_cli", True):
         # Only local CLIs have a model catalog to sync; partners run their own.
         raise HTTPException(status_code=400, detail=f"Unknown agent kind: {kind!r}")
-    options = await sync_backend_options(kind)
+    try:
+        options = await sync_backend_options(kind)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return options.to_dict()
 
 
@@ -165,6 +170,15 @@ async def create_connection(payload: ConnectSubagentRequest):
         from deeptutor.services.subagent import get_backend
 
         backend = get_backend(agent_kind)
+        if backend is not None and getattr(backend, "local_cli", True):
+            from deeptutor.multi_user.execution_access import (
+                assert_local_subagent_execution_allowed,
+            )
+
+            try:
+                assert_local_subagent_execution_allowed()
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
         raw_cwd = (payload.cwd or "").strip()
         if raw_cwd and backend is not None and getattr(backend, "local_cli", True):
             try:
@@ -243,6 +257,15 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
     backend = get_backend(kind)
     if backend is None:
         raise HTTPException(status_code=400, detail=f"Unknown agent kind: {kind!r}")
+    if getattr(backend, "local_cli", True):
+        from deeptutor.multi_user.execution_access import (
+            assert_local_subagent_execution_allowed,
+        )
+
+        try:
+            assert_local_subagent_execution_allowed()
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     config = load_subagent_settings().backend(kind)
     skey = session_key(payload.chat_session_id, name) if payload.chat_session_id else ""

@@ -16,6 +16,7 @@ from deeptutor.services.config import (
 )
 from deeptutor.services.config.origins import normalize_origins
 from deeptutor.services.path_service import get_path_service
+from deeptutor.multi_user.request_scope import UserScopeMiddleware
 
 ensure_runtime_settings_files()
 export_runtime_settings_to_env(overwrite=True)
@@ -110,6 +111,13 @@ async def lifespan(app: FastAPI):
     # Execute on startup
     logger.info("Application startup")
     app.state.ready = False
+
+    # The built-in identity store is the isolation boundary.  Refuse to start
+    # a multi-user process that still points session/auth traffic at the old
+    # shared PocketBase control plane.
+    from deeptutor.services.auth import assert_supported_backend
+
+    assert_supported_backend()
 
     # Validate configuration consistency
     validate_tool_consistency()
@@ -465,6 +473,7 @@ logger.info(
     _cors_settings["allow_origins"],
     _cors_settings["allow_origin_regex"],
 )
+app.add_middleware(UserScopeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_settings["allow_origins"],

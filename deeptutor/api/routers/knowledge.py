@@ -46,6 +46,7 @@ from deeptutor.logging import PROCESS_LOG_PRIVATE_ATTR
 from deeptutor.multi_user.context import (
     get_current_user,
     get_current_user_or_none,
+    request_scope_active,
     reset_current_user,
     set_current_user,
 )
@@ -229,7 +230,54 @@ IMAGE_ACCEPT_MIME_TYPES = {
 def _build_unique_task_id(task_type: str, task_key_prefix: str) -> str:
     task_manager = TaskIDManager.get_instance()
     task_key = f"{task_key_prefix}_{datetime.now().isoformat()}_{uuid4().hex[:8]}"
-    return task_manager.generate_task_id(task_type, task_key)
+    user = get_current_user_or_none()
+    if user is None:
+        if request_scope_active():
+            # A missing identity inside an ASGI request is an authorization
+            # failure, never permission to create an administrator task.
+            get_current_user()
+        # Background/CLI callers outside an HTTP request retain the historical
+        # unscoped metadata.  Authenticated API callers always have a user and
+        # therefore get an ownership record below.
+        return task_manager.generate_task_id(task_type, task_key)
+    return task_manager.generate_task_id(
+        task_type,
+        task_key,
+        owner_id=user.id,
+        scope_key=str(_current_kb_base_dir().resolve()),
+    )
+
+
+def _task_metadata_visible(task_id: str, task_metadata: dict | None, *, base_dir: Path) -> bool:
+    """Check task ownership for the current request without revealing IDs."""
+
+    user = get_current_user_or_none()
+    if user is None or user.is_admin:
+        return True
+    if not task_metadata:
+        return False
+    return TaskIDManager.get_instance().task_belongs_to(
+        task_id,
+        user.id,
+        scope_key=str(base_dir.resolve()),
+    )
+
+
+def _assert_task_visible(task_id: str) -> None:
+    """Raise a uniform 404 unless the task belongs to the caller."""
+
+    user = get_current_user()
+    if user.is_admin:
+        return
+    manager = TaskIDManager.get_instance()
+    metadata = manager.get_task_metadata(task_id)
+    if not metadata or not manager.task_belongs_to(
+        task_id,
+        user.id,
+        scope_key=str(_current_kb_base_dir().resolve()),
+    ):
+        # Do not distinguish a foreign task from an unknown task.
+        raise HTTPException(status_code=404, detail="Task not found")
 
 
 def _mark_kb_queued_for_processing(
@@ -1799,11 +1847,14 @@ async def get_all_kb_configs():
 async def get_kb_config(kb_name: str):
     """Get configuration for a specific knowledge base."""
     try:
+        kb_name = validate_knowledge_base_name(kb_name)
         from deeptutor.services.config import get_kb_config_service
 
         service = get_kb_config_service()
         config = service.get_kb_config(kb_name)
         return {"kb_name": kb_name, "config": config}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error getting config for KB '{kb_name}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1813,6 +1864,7 @@ async def get_kb_config(kb_name: str):
 async def update_kb_config(kb_name: str, config: dict):
     """Update configuration for a specific knowledge base."""
     try:
+        kb_name = validate_knowledge_base_name(kb_name)
         from deeptutor.services.config import get_kb_config_service
         from deeptutor.services.rag.index_probe import has_ready_provider_index
 
@@ -1854,6 +1906,8 @@ async def update_kb_config(kb_name: str, config: dict):
         return {"status": "success", "kb_name": kb_name, "config": service.get_kb_config(kb_name)}
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error updating config for KB '{kb_name}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2618,7 +2672,17 @@ def _resolve_kb_raw_dir(kb_name: str, *, allow_unsupported: bool = False) -> Pat
         )
 
     kb_path = manager.get_knowledge_base_path(resolved_name)
-    return kb_path / "raw"
+    raw_dir = kb_path / "raw"
+    # A raw directory is managed storage, never an external pointer.  Resolve
+    # it only after rejecting a symlink so a user cannot make the file API walk
+    # into another account's workspace through a persisted link.
+    if raw_dir.is_symlink():
+        raise HTTPException(status_code=404, detail="Knowledge base files are unavailable")
+    try:
+        raw_dir.resolve().relative_to(kb_path.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Knowledge base files are unavailable") from exc
+    return raw_dir
 
 
 def _resolve_kb_raw_file_or_404(kb_name: str, filename: str) -> Path:
@@ -2659,6 +2723,8 @@ async def list_kb_raw_files(kb_name: str):
 
     files = []
     for entry in sorted(raw_dir.rglob("*"), key=lambda p: str(p).lower()):
+        if entry.is_symlink():
+            continue
         rel = entry.relative_to(raw_dir).as_posix()
         if entry.is_dir():
             files.append({"name": rel, "type": "folder"})
@@ -2814,10 +2880,19 @@ async def delete_kb_file(kb_name: str, filename: str):
     }
 
 
-def _delete_kb(kb_name: str) -> dict[str, str]:
+def _delete_kb(kb_name: str, *, allow_legacy_config_name: bool = False) -> dict[str, str]:
     """Delete ``kb_name``, whichever route addressed it."""
     try:
-        manager, resolved_name, _ = _writable_kb(kb_name)
+        manager = _overridden_kb_manager()
+        resolved_name = str(kb_name or "").strip()
+        if allow_legacy_config_name:
+            manager = manager or current_kb_manager()
+            manager.config = manager._load_config()
+            if resolved_name not in manager.config.get("knowledge_bases", {}):
+                manager, resolved_name, _ = _writable_kb(kb_name)
+        else:
+            manager, resolved_name, _ = _writable_kb(kb_name)
+        assert manager is not None
         success = manager.delete_knowledge_base(resolved_name, confirm=True)
     except HTTPException:
         # Re-raised before the catch-all below, which used to turn a 404 from
@@ -2853,7 +2928,7 @@ async def delete_knowledge_base_by_name(payload: DeleteKnowledgeBaseRequest):
     declared ahead of the DELETE routes for linked folders, GitHub sources and
     web sources, and a greedy converter would silently swallow all three.
     """
-    return _delete_kb(payload.name)
+    return _delete_kb(payload.name, allow_legacy_config_name=True)
 
 
 @router.delete("/knowledge-bases/{kb_name}")
@@ -2865,6 +2940,7 @@ async def delete_knowledge_base(kb_name: str):
 @router.get("/knowledge-bases/tasks/{task_id}/stream")
 async def stream_task_logs(task_id: str):
     """Stream task-specific logs for knowledge-base operations."""
+    _assert_task_visible(task_id)
     manager = get_task_stream_manager()
     manager.ensure_task(task_id)
     return StreamingResponse(
@@ -3612,18 +3688,32 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
     await websocket.accept()
 
     broadcaster = ProgressBroadcaster.get_instance()
+    resolved_kb_name = kb_name
+    base_dir: Path | None = None
+    scope_key = ""
+    connected = False
 
     try:
-        await broadcaster.connect(kb_name, websocket)
+        # Resolve through the same visibility boundary as the HTTP KB routes.
+        # The ``None`` branch is retained only for old direct unit callers that
+        # monkeypatch ``ws_require_auth`` without installing a user context.
+        if get_current_user_or_none() is None:
+            base_dir = _current_kb_base_dir()
+        else:
+            resource = resolve_kb(kb_name)
+            resolved_kb_name = resource.name
+            base_dir = resource.base_dir
+        scope_key = str(base_dir.resolve())
+        await broadcaster.connect(resolved_kb_name, websocket, scope_key=scope_key)
+        connected = True
 
-        base_dir = _current_kb_base_dir()
-        progress_tracker = ProgressTracker(kb_name, base_dir)
+        progress_tracker = ProgressTracker(resolved_kb_name, base_dir)
         initial_progress = progress_tracker.get_progress()
         expected_task_id = websocket.query_params.get("task_id")
         task_manager = TaskIDManager.get_instance()
 
         try:
-            kb_info = KnowledgeBaseManager(base_dir=str(base_dir)).get_info(kb_name)
+            kb_info = KnowledgeBaseManager(base_dir=str(base_dir)).get_info(resolved_kb_name)
             kb_is_ready = bool(kb_info.get("statistics", {}).get("rag_initialized"))
         except Exception:
             kb_is_ready = False
@@ -3632,6 +3722,15 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
             progress_task_id = initial_progress.get("task_id") if initial_progress else None
             stage = initial_progress.get("stage") if initial_progress else None
             task_metadata = task_manager.get_task_metadata(expected_task_id)
+            if task_metadata and not _task_metadata_visible(
+                expected_task_id,
+                task_metadata,
+                base_dir=base_dir,
+            ):
+                # Foreign and unknown task IDs share the same response so the
+                # endpoint cannot become a task-existence oracle.
+                await websocket.close(code=4004, reason="Task not found")
+                return
 
             # A terminal snapshot is durable and authoritative. Always replay
             # it, including completed snapshots for already-ready KBs.
@@ -3665,7 +3764,7 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
                     initial_progress = progress_tracker.get_progress()
                 else:
                     initial_progress = {
-                        "kb_name": kb_name,
+                        "kb_name": resolved_kb_name,
                         "task_id": expected_task_id,
                         "stage": "error",
                         "message": error_message,
@@ -3693,7 +3792,7 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
                     else str(task_metadata.get("error") or "Knowledge-base processing failed.")
                 )
                 terminal_progress = {
-                    "kb_name": kb_name,
+                    "kb_name": resolved_kb_name,
                     "task_id": expected_task_id,
                     "stage": "completed" if is_completed else "error",
                     "message": message,
@@ -3822,7 +3921,7 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
                                 {
                                     "type": "progress",
                                     "data": {
-                                        "kb_name": kb_name,
+                                        "kb_name": resolved_kb_name,
                                         "task_id": expected_task_id,
                                         "stage": "completed" if is_completed else "error",
                                         "message": message,
@@ -3854,7 +3953,8 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
         except Exception:
             pass
     finally:
-        await broadcaster.disconnect(kb_name, websocket)
+        if connected:
+            await broadcaster.disconnect(resolved_kb_name, websocket, scope_key=scope_key)
         try:
             await websocket.close()
         except Exception:
@@ -3953,7 +4053,10 @@ async def sync_folder(kb_name: str, folder_id: str, background_tasks: Background
         if not folder_info:
             raise HTTPException(status_code=404, detail=f"Linked folder '{folder_id}' not found")
 
-        folder_path = folder_info["path"]
+        try:
+            folder_path = str(assert_path_allowed(str(folder_info["path"])))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Linked folder is outside your scope") from exc
 
         # Check for changes (new or modified files)
         changes = manager.detect_folder_changes(kb_name, folder_id)

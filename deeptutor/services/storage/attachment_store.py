@@ -122,13 +122,27 @@ class LocalDiskAttachmentStore:
 
     def _session_dir(self, session_id: str) -> Path:
         sid = _coerce_filename(session_id)
-        return (self._root / sid).resolve()
+        root = self._root.resolve()
+        if self._root.exists() and self._root.is_symlink():
+            raise ValueError("attachment root cannot be a symbolic link")
+        raw = self._root / sid
+        if raw.is_symlink():
+            raise ValueError("attachment session directory cannot be a symbolic link")
+        resolved = raw.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("attachment session directory leaves the root") from exc
+        return resolved
 
     def _safe_join(self, session_id: str, name: str) -> Path | None:
         """Join *name* under the session dir and confirm the result stays
         inside ``self._root``. Returns ``None`` if traversal is detected.
         """
-        session_dir = self._session_dir(session_id)
+        try:
+            session_dir = self._session_dir(session_id)
+        except ValueError:
+            return None
         # Resolve the candidate even if it doesn't exist yet — prevents a
         # symlink-based attack that would point outside the root once created.
         candidate = (session_dir / name).resolve()
@@ -183,14 +197,22 @@ class LocalDiskAttachmentStore:
                     pass
 
     async def delete_session(self, session_id: str) -> None:
-        session_dir = self._session_dir(session_id)
+        try:
+            session_dir = self._session_dir(session_id)
+        except ValueError as exc:
+            logger.warning("refusing to delete unsafe attachment session %r: %s", session_id, exc)
+            return
         if not session_dir.exists():
             return
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._rmtree_sync, session_dir)
 
     async def delete_attachment(self, session_id: str, attachment_id: str) -> None:
-        session_dir = self._session_dir(session_id)
+        try:
+            session_dir = self._session_dir(session_id)
+        except ValueError as exc:
+            logger.warning("refusing to delete unsafe attachment session %r: %s", session_id, exc)
+            return
         if not session_dir.exists():
             return
         loop = asyncio.get_running_loop()
@@ -245,10 +267,22 @@ def get_attachment_store() -> AttachmentStore:
 
 
 def _attachment_root() -> Path:
-    override = str(load_system_settings().get("chat_attachment_dir") or "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
-    return get_path_service().get_user_root().joinpath(*_DEFAULT_SUBPATH).resolve()
+    # ``system.json`` is deployment/admin configuration.  Never let a normal
+    # account turn that absolute override into a shared attachment root; its
+    # store is always derived from the request-scoped user PathService.
+    from deeptutor.multi_user.context import get_current_user
+
+    user = get_current_user()
+    if user.is_admin:
+        override = str(load_system_settings().get("chat_attachment_dir") or "").strip()
+        if override:
+            return Path(override).expanduser().resolve()
+    path_service = get_path_service()
+    raw_root = path_service.get_user_root().joinpath(*_DEFAULT_SUBPATH)
+    # Validate the lexical components before any ``resolve()`` call.  A
+    # symlink such as ``workspace/chat -> ../other-user/chat`` must fail closed
+    # instead of becoming the apparently-normalized attachment root.
+    return path_service._scoped_path(raw_root, "attachment root")
 
 
 def reset_attachment_store() -> None:

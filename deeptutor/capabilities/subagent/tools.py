@@ -107,6 +107,15 @@ class ConsultSubagentTool(BaseTool):
             return ToolResult(
                 content=f"Unknown subagent backend: {spec.get('kind')!r}", success=False
             )
+        if getattr(backend, "local_cli", True):
+            from deeptutor.multi_user.execution_access import (
+                assert_local_subagent_execution_allowed,
+            )
+
+            try:
+                assert_local_subagent_execution_allowed()
+            except PermissionError as exc:
+                return ToolResult(content=str(exc), success=False)
 
         state["count"] = int(state.get("count", 0)) + 1
         consult_index = state["count"]

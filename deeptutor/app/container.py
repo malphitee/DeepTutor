@@ -136,6 +136,70 @@ class ApplicationContainer:
             await self.coordinator.close()
         self._started = False
 
+    async def revoke_user_turns(self, user_id: str, *, previous_role: str | None = None) -> None:
+        """Cancel active turns for one revoked account across this worker.
+
+        Local execution handles are cancelled directly.  A turn owned by a
+        different worker receives a coordinator cancel command only after the
+        target user's own store proves that the turn belongs to that account;
+        no global scan or cross-user session access is performed.
+        """
+
+        from deeptutor.multi_user.identity import get_user_by_id
+        from deeptutor.multi_user.models import CurrentUser
+        from deeptutor.multi_user.paths import scope_for_user, user_context
+
+        account = get_user_by_id(str(user_id))
+        if account is None:
+            # Deleted accounts no longer have an identity record.  Their local
+            # handles were already signalled by identity.delete_user; there is
+            # no safe store scope to inspect after deletion.
+            return
+        username, record = account
+        # The admin workspace is intentionally shared for compatibility and
+        # has no per-account turn boundary.  A role change may have already
+        # promoted a user before this cleanup runs, so use the pre-mutation
+        # role supplied by the caller and never scan the admin store here.
+        role = str(previous_role or record.get("role") or "user")
+        if role != "user":
+            return
+        user = CurrentUser(
+            id=str(user_id),
+            username=username,
+            role=role,  # type: ignore[arg-type]
+            scope=scope_for_user(str(user_id), is_admin=role == "admin"),
+        )
+        with user_context(user):
+            store = self.store_provider.get()
+            runtime = self.runtime_registry.get(store)
+            try:
+                sessions = await store.list_sessions(limit=100_000, offset=0)
+            except Exception:
+                return
+            for session in sessions:
+                session_id = str(session.get("id") or session.get("session_id") or "")
+                if not session_id:
+                    continue
+                try:
+                    active = await store.list_active_turns(session_id)
+                except Exception:
+                    continue
+                for turn in active:
+                    turn_id = str(turn.get("id") or turn.get("turn_id") or "")
+                    if not turn_id:
+                        continue
+                    if await runtime.has_live_execution(turn_id):
+                        await runtime.cancel_turn(turn_id)
+                        continue
+                    lease = await self.coordinator.get_lease(turn_id)
+                    if lease is not None:
+                        await self.coordinator.submit_command(
+                            turn_id,
+                            "cancel",
+                            {},
+                            command_id=f"account-revoked:{user_id}:{turn_id}",
+                        )
+
     async def recover_once(self) -> None:
         """Recover expired turns across every registered user repository.
 

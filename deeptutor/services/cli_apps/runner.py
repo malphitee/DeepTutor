@@ -50,6 +50,12 @@ async def run_app(
     come back as an :class:`ExecResult`, because the caller is a tool whose job
     is to report what happened rather than to fail a turn.
     """
+    # ``run_app`` is also a public service helper.  Repeat the tool-boundary
+    # check before resolving an executable or assembling host mounts so callers
+    # that bypass ``CliAppTool`` cannot open execution for an ordinary account.
+    from deeptutor.multi_user.execution_access import assert_sandbox_execution_allowed
+
+    assert_sandbox_execution_allowed()
     if app.abi and app.abi != abi_stamp():
         # The venv's console scripts hard-code the interpreter that built them.
         # After a base-image bump they point at a path that no longer exists, and

@@ -81,6 +81,12 @@ async def acquire_server(
     ``env_prefix`` names the CLI's server env-var family (``OPENCODE`` /
     ``MIMOCODE``); ``username`` is the basic-auth user the CLI expects.
     """
+    # Check before looking up an existing handle.  Reusing an administrator's
+    # already-running local server would otherwise let an ordinary account
+    # control a host process without spawning a new child in this call.
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
     key = (cli_command, cwd or "")
     async with _lock:
         _reap_stale(except_key=key)

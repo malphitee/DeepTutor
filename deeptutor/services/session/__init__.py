@@ -22,6 +22,9 @@ def get_session_store() -> SessionStoreProtocol:
     from deeptutor.services.pocketbase_client import is_pocketbase_enabled
 
     if is_pocketbase_enabled():
+        from deeptutor.services.auth import assert_supported_backend
+
+        assert_supported_backend()
         from deeptutor.services.config import load_integrations_settings
 
         from .pocketbase_store import PocketBaseSessionStore

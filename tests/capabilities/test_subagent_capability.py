@@ -9,6 +9,8 @@ authoritative consult-budget + session continuity + event streaming.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from deeptutor.agents._shared.tool_composition import ToolMountFlags, compose_enabled_tools
@@ -24,6 +26,8 @@ from deeptutor.core.context import TurnRuntimeContext, UnifiedContext
 from deeptutor.runtime.registry.tool_registry import get_tool_registry
 from deeptutor.services.subagent.config import BackendConfig
 from deeptutor.services.subagent.types import ConsultResult, SubagentEvent
+from deeptutor.multi_user.context import reset_current_user, set_current_user
+from deeptutor.multi_user.models import CurrentUser, UserScope
 
 
 def _bind(monkeypatch, *, kind: str = "claude_code", cwd: str = "", name: str = "myagent") -> None:
@@ -259,6 +263,31 @@ async def test_consult_budget_is_authoritative(monkeypatch) -> None:
 async def test_consult_without_spec_is_graceful() -> None:
     res = await ConsultSubagentTool().execute(question="hi")
     assert res.success is False and "no subagent" in res.content.lower()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_user_cannot_consult_local_cli(monkeypatch) -> None:
+    """A local CLI inherits the app's host access and is admin-only."""
+    backend = _FakeBackend()
+    monkeypatch.setattr("deeptutor.services.subagent.get_backend", lambda kind: backend)
+    user = CurrentUser(
+        id="u_alice",
+        username="alice",
+        role="user",
+        scope=UserScope(kind="user", user_id="u_alice", root=Path("/tmp/alice")),
+    )
+    token = set_current_user(user)
+    try:
+        state: dict = {"count": 0, "session_id": None, "name": "myagent"}
+        result = await ConsultSubagentTool().execute(
+            question="read the admin files", _subagent=_spec(state)
+        )
+    finally:
+        reset_current_user(token)
+    assert result.success is False
+    assert "cannot run a local subagent" in result.content
+    assert backend.calls == []
+    assert state["count"] == 0
 
 
 @pytest.mark.asyncio

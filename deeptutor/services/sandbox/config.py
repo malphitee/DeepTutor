@@ -10,10 +10,11 @@ shape without per-user config:
   subprocess (admin-opt-in local dev — APPLICATION isolation only);
 * else ⇒ no sandbox (exec disabled).
 
-``exec`` is offered to ordinary users only when the active backend reaches
-SYSTEM isolation; APPLICATION isolation is admin-opt-in (see
-:mod:`deeptutor.tools.exec_tool`). Per-user quotas live in
-:mod:`deeptutor.services.sandbox.quota`.
+``exec`` remains unavailable to ordinary users until the active backend also
+provides a private per-user work directory, temporary directory, and artifact
+root; the shipped runner's SYSTEM isolation alone is insufficient. APPLICATION
+isolation is admin-opt-in (see :mod:`deeptutor.tools.exec_tool`). Per-user quotas
+live in :mod:`deeptutor.services.sandbox.quota`.
 """
 
 from __future__ import annotations

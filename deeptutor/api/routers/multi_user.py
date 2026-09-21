@@ -13,7 +13,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, StrictBool, field_validator
 
-from deeptutor.api.routers.auth import require_admin, require_auth
+from deeptutor.api.routers.auth import _terminate_revoked_user, require_admin, require_auth
 from deeptutor.knowledge.manager import KnowledgeBaseManager
 from deeptutor.multi_user.audit import log_admin_action, log_guardian_action
 from deeptutor.multi_user.book_permission import (
@@ -257,7 +257,13 @@ def _stage_assigned_materials(user_id: str, grant: dict[str, Any]) -> None:
             continue
         stage = target_root / f".{material_id}.{uuid.uuid4().hex[:8]}.staging"
         try:
-            shutil.copytree(admin_root / material_id, stage)
+            source = admin_root / material_id
+            # Grants may expose an administrator-owned book, but copying it
+            # must never follow a link planted in the source tree into another
+            # tenant's files.  Reject the whole assignment if any link exists.
+            if source.is_symlink() or any(item.is_symlink() for item in source.rglob("*")):
+                raise ValueError(f"Admin reading material contains a symbolic link: {material_id}")
+            shutil.copytree(source, stage, symlinks=False)
             os.replace(stage, target)
         finally:
             shutil.rmtree(stage, ignore_errors=True)
@@ -677,6 +683,11 @@ async def put_guardian_restrictions(
         grant = save_grant(learner_user_id, grant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # A learning restriction changes the effective capability surface of an
+    # already-running turn.  Tear down live work after the durable grant write
+    # so a turn cannot retain a broader tool/resource view until its next
+    # request (or keep a WebSocket subscription alive indefinitely).
+    await _terminate_revoked_user(learner_user_id)
     restrictions = _guardian_restrictions(grant)
     _log_supervisor_action(
         "guardian_restrictions_set",
@@ -708,6 +719,7 @@ async def reset_learner_credentials(
     )
     if set_password(learner_username, hash_password(payload.new_password)) is None:
         raise HTTPException(status_code=404, detail="User not found")
+    await _terminate_revoked_user(learner_user_id)
     _log_supervisor_action(
         "guardian_credential_reset",
         actor_user_id=actor_user_id,
@@ -747,6 +759,10 @@ async def put_user_grants(
         grant = save_grant(user_id, grant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Grant replacement is an authorization boundary, including when the new
+    # grant adds access: canceling in-flight work prevents a turn from mixing
+    # the old and new permission snapshots and makes revocation immediate.
+    await _terminate_revoked_user(user_id)
     log_admin_action(
         "grant_set",
         target_user_id=user_id,

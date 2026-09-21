@@ -43,11 +43,11 @@ services:
       - deeptutor-network
 
   # ============================================
-  # PocketBase — optional auth + storage sidecar
-  # Set integrations.pocketbase_url=http://pocketbase:8090 to activate.
-  # Leave integrations.pocketbase_url blank to run without PocketBase (SQLite fallback).
+  # PocketBase — legacy single-user compatibility only.
+  # It is profile-gated and must not be enabled with built-in multi-user auth.
   # ============================================
   pocketbase:
+    profiles: ["legacy-pocketbase"]
     image: ghcr.io/muchobien/pocketbase:latest
     container_name: pocketbase
     restart: unless-stopped
@@ -91,9 +91,9 @@ services:
       # workspaces (data/users), partners (data/partners), accounts/grants/
       # audit (data/system), knowledge bases, memory.
       # The sandbox-runner gets a narrower slice of this volume: never
-      # data/system, which holds auth state, provider API keys, and per-owner
-      # secrets. What it *does* carry for non-admin accounts is wider than
-      # workspace subtrees — see the scope note on that service's own volumes.
+      # data/system, data/users, or admin settings. Ordinary authenticated
+      # users do not receive host execution; this mount is the admin/single-user
+      # compatibility workspace only.
       - ./data:/app/data
       - "${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}:/workspace"
 
@@ -127,8 +127,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      pocketbase:
-        condition: service_healthy
       sandbox-runner:
         condition: service_healthy
 
@@ -153,11 +151,10 @@ services:
     container_name: deeptutor-sandbox-runner
     restart: unless-stopped
 
-    # Share the content workspace at the SAME stable path as the main app.
-    # The whole tree is readable so workspace_list/read and shell tools can use
-    # user files. Only outputs/ is writable: a command cannot modify source
-    # material, user settings, or any other host path. The runner never sees
-    # data/system, data/users, or the rest of the application data tree.
+    # Share only the admin/single-user compatibility workspace at the SAME
+    # stable path as the main app. Authenticated ordinary users are denied exec
+    # until a deployment supplies a private runner, temp directory, and artifact
+    # root for each account.
     volumes:
       - "${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}:/workspace:ro"
       - "${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}/outputs:/workspace/outputs"

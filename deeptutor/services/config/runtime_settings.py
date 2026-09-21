@@ -1256,6 +1256,15 @@ def _global_settings_dir() -> Path:
 
         return get_admin_path_service().get_settings_dir()
     except Exception:
+        # During an authenticated request a failed admin-scope resolution is
+        # an authorization/storage error.  Falling through to the ambient
+        # request PathService would make a malformed scope look like a valid
+        # settings root.  Keep the fallback only for startup and local CLI
+        # compatibility callers, which have no active request boundary.
+        from deeptutor.multi_user.context import request_scope_active
+
+        if request_scope_active():
+            raise
         return get_path_service().get_settings_dir()
 
 

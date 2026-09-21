@@ -562,6 +562,11 @@ class KnowledgeBaseManager:
         base_exists = self.base_dir.exists()
         grace_cutoff = datetime.now() - timedelta(seconds=_ORPHAN_PRUNE_GRACE_SECONDS)
         for kb_name, kb_entry in list(config_kbs.items()):
+            try:
+                validate_knowledge_base_name(kb_name)
+            except ValueError:
+                logger.warning("Ignoring invalid knowledge base name in config: %r", kb_name)
+                continue
             # Connected KBs (Obsidian vaults, linked indexes) live outside
             # ``base_dir`` — they have no on-disk KB folder by design, so the
             # orphan prune below would wrongly delete them. Keep them
@@ -570,7 +575,19 @@ class KnowledgeBaseManager:
                 kb_list.add(kb_name)
                 continue
             rel_path = (kb_entry or {}).get("path", kb_name)
+            try:
+                rel_path = validate_knowledge_base_name(str(rel_path))
+            except ValueError:
+                logger.warning("Ignoring invalid knowledge base path for %r", kb_name)
+                continue
             kb_dir = self.base_dir / rel_path
+            # A configured KB directory is part of the tenant's storage jail.
+            # Do not follow a symlink here: even listing its name would expose
+            # a resource that the caller cannot safely own, and later cleanup
+            # could otherwise operate on a shared tree.
+            if kb_dir.is_symlink():
+                logger.warning("Ignoring symbolic-link knowledge base directory %s", kb_dir)
+                continue
             if base_exists and not kb_dir.exists():
                 if _entry_updated_after(kb_entry, grace_cutoff):
                     kb_list.add(kb_name)
@@ -589,7 +606,11 @@ class KnowledgeBaseManager:
         # This ensures backward compatibility and auto-discovery
         if base_exists:
             for item in self.base_dir.iterdir():
-                if not item.is_dir() or item.name.startswith(("__", ".")):
+                if (
+                    not item.is_dir()
+                    or item.is_symlink()
+                    or item.name.startswith(("__", "."))
+                ):
                     continue
 
                 # Skip if already in config
@@ -720,9 +741,7 @@ class KnowledgeBaseManager:
         Returns ``False`` when the name is already registered here, leaving
         the existing entry untouched, so callers can provision idempotently.
         """
-        name = (name or "").strip()
-        if not name:
-            raise ValueError("Knowledge base name is required.")
+        name = validate_knowledge_base_name(name)
         if not is_connected_kb(entry):
             raise ValueError(f"Not a connected knowledge base entry: {name}")
 
@@ -1101,6 +1120,7 @@ class KnowledgeBaseManager:
             name = self.config.get("default")
             if name is None:
                 raise ValueError("No default knowledge base set")
+        name = validate_knowledge_base_name(name)
 
         entry = self.config.get("knowledge_bases", {}).get(name, {})
         external = external_root_of(entry)
@@ -1108,13 +1128,44 @@ class KnowledgeBaseManager:
             folder = Path(external).expanduser()
             if not folder.is_dir():
                 raise ValueError(f"Linked folder is no longer available: {external}")
+            # Re-check the persisted pointer every time it is consumed.  A
+            # user-owned config/backup can contain an edited absolute path,
+            # and a previously valid directory can later be replaced by a
+            # symlink.  Assigned administrator KBs are intentionally allowed
+            # through this branch because the assignment itself is the
+            # explicit grant boundary; a user's own pointer must remain in
+            # that user's workspace.
+            from deeptutor.multi_user.context import get_current_user
+
+            current_user = get_current_user()
+            from deeptutor.multi_user.paths import get_admin_path_service
+
+            is_assigned_admin = (
+                not current_user.is_admin
+                and self.base_dir.resolve()
+                == get_admin_path_service().get_knowledge_bases_root().resolve()
+            )
+            if not is_assigned_admin:
+                from deeptutor.services.rag.linked_kb import assert_path_allowed
+
+                try:
+                    folder = assert_path_allowed(str(folder))
+                except ValueError as exc:
+                    raise ValueError("Linked knowledge-base path is outside your scope") from exc
             return folder
 
         kb_dir = self.base_dir / name
+        if kb_dir.is_symlink():
+            raise ValueError(f"Knowledge base path cannot be a symbolic link: {name}")
         if not kb_dir.exists():
             raise ValueError(f"Knowledge base not found: {name}")
-
-        return kb_dir
+        base = self.base_dir.resolve()
+        resolved = kb_dir.resolve()
+        try:
+            resolved.relative_to(base)
+        except ValueError as exc:
+            raise ValueError(f"Knowledge base path leaves its root: {name}") from exc
+        return resolved
 
     def get_rag_storage_path(self, name: str | None = None) -> Path:
         """Get active index storage path for a knowledge base."""
@@ -1299,7 +1350,20 @@ class KnowledgeBaseManager:
         # Connected KBs live outside ``base_dir``; resolve to their external
         # pointer so the on-disk stats/index-version scan below reflect reality.
         external = external_root_of(kb_config)
-        kb_dir = Path(external).expanduser() if external else self.base_dir / kb_name
+        if external:
+            # Use the same persisted-pointer validation as the direct path
+            # accessor above.  ``get_info`` is called by listing endpoints and
+            # must not bypass the user workspace jail merely because it only
+            # reports metadata/statistics.
+            try:
+                kb_dir = self.get_knowledge_base_path(kb_name)
+            except ValueError:
+                # Do not fall back to the untrusted pointer after validation
+                # fails.  Keep the metadata row listable, but expose no
+                # filesystem statistics from the rejected location.
+                kb_dir = self.base_dir / "__invalid_external_pointer__"
+        else:
+            kb_dir = self.base_dir / kb_name
 
         status = kb_config.get("status")
         progress = kb_config.get("progress")
@@ -1532,14 +1596,24 @@ class KnowledgeBaseManager:
         # and then raise "not found" on the now-empty config.
         self.config = self._load_config()
         config_kbs = self.config.get("knowledge_bases", {})
-        if name not in config_kbs and not (self.base_dir / name).exists():
+        try:
+            safe_name = validate_knowledge_base_name(name)
+        except ValueError:
+            # Pre-validation releases could persist arbitrary config keys.
+            # They may be removed from the config, but must never be joined to
+            # the filesystem: a key such as ``../../system`` would otherwise
+            # turn the cleanup endpoint into an out-of-root recursive delete.
+            safe_name = None
+        kb_dir = self.base_dir / safe_name if safe_name is not None else None
+        if kb_dir is not None and kb_dir.is_symlink():
+            raise ValueError(f"Knowledge base path cannot be a symbolic link: {name}")
+        if name not in config_kbs and (kb_dir is None or not kb_dir.exists()):
             raise ValueError(f"Knowledge base not found: {name}")
 
         # Resolve the directory directly to stay idempotent: if the on-disk
         # folder was already removed (e.g. manually rm-rf'd) we still want to
         # purge the orphaned entry from kb_config.json instead of failing.
-        kb_dir = self.base_dir / name
-        dir_exists = kb_dir.exists()
+        dir_exists = kb_dir is not None and kb_dir.exists()
 
         # Connected KBs (Obsidian vaults, linked indexes, subagent pointers)
         # reference the user's own external resource — or, for subagents, no
@@ -1560,13 +1634,13 @@ class KnowledgeBaseManager:
         if not confirm:
             # Ask for confirmation in CLI
             print(f"⚠️  Warning: This will permanently delete the knowledge base '{name}'")
-            print(f"   Path: {kb_dir}")
+            print(f"   Path: {kb_dir or '(legacy config entry only)'}")
             response = input("Are you sure? Type 'yes' to confirm: ")
             if response.lower() != "yes":
                 print("Deletion cancelled.")
                 return False
 
-        if dir_exists:
+        if dir_exists and kb_dir is not None:
 
             def _on_rmtree_error(func, path, exc_info):
                 exc = exc_info[1]
@@ -1596,7 +1670,7 @@ class KnowledgeBaseManager:
                     )
 
             shutil.rmtree(kb_dir, onerror=_on_rmtree_error)
-        elif not connected:
+        elif not connected and kb_dir is not None:
             logger.warning(
                 f"KB directory '{kb_dir}' missing on disk; cleaning up orphaned config entry."
             )
@@ -1710,13 +1784,13 @@ class KnowledgeBaseManager:
         if kb_name not in self.list_knowledge_bases():
             raise ValueError(f"Knowledge base not found: {kb_name}")
 
-        # Normalize path (cross-platform: handles ~, relative paths, etc.)
-        folder = Path(folder_path).expanduser().resolve()
+        # Resolve through the same multi-user path jail used by connected KBs
+        # and subagent cwd registration.  Direct CLI/admin callers retain the
+        # single-user compatibility behavior; an ordinary request is confined
+        # to its own workspace before we scan or persist the folder.
+        from deeptutor.services.rag.linked_kb import assert_path_allowed
 
-        if not folder.exists():
-            raise ValueError(f"Folder does not exist: {folder}")
-        if not folder.is_dir():
-            raise ValueError(f"Path is not a directory: {folder}")
+        folder = assert_path_allowed(folder_path)
 
         files = FileTypeRouter.collect_supported_files(folder, recursive=True)
 

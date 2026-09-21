@@ -20,12 +20,12 @@ import os
 from pathlib import Path
 from typing import Iterator
 
-from deeptutor.services.memory.paths import Surface, memory_root
+from deeptutor.services.memory.paths import Surface, _safe_memory_child
 from deeptutor.services.memory.snapshot.entity import ChangeEntry
 
 
 def snapshot_dir(surface: Surface) -> Path:
-    return memory_root() / "snapshot" / surface
+    return _safe_memory_child("snapshot", surface)
 
 
 def state_file(surface: Surface) -> Path:

@@ -1394,5 +1394,6 @@ class _TurnExecution:
     events_flushed: bool = False
     lease: TurnLease | None = None
     coordination_task: asyncio.Task[None] | None = None
+    revocation_handle: Any | None = None
     lease_lost: bool = False
     shutdown_requested: bool = False

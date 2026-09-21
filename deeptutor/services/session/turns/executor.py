@@ -1218,6 +1218,11 @@ class TurnExecutor:
                     retryable=resolved_retryable,
                 )
         finally:
+            if execution.revocation_handle is not None:
+                from deeptutor.multi_user.revocation import unregister
+
+                unregister(execution.revocation_handle)
+                execution.revocation_handle = None
             if llm_scope_token is not None and reset_active_llm_selection is not None:
                 reset_active_llm_selection(llm_scope_token)
             # Drop the reply queue first — any in-flight ``submit_user_reply``

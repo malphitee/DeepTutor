@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 import contextlib
+from pathlib import Path
 import time
 from typing import Any
 
@@ -28,7 +29,36 @@ class TurnApplicationService:
 
     def _resolve(self) -> tuple[SessionStoreProtocol, TurnRuntimeManager]:
         store = self.store_provider.get()
+        self._assert_store_scope(store)
         return store, self.runtime_registry.get(store)
+
+    @staticmethod
+    def _assert_store_scope(store: SessionStoreProtocol) -> None:
+        from deeptutor.multi_user.context import get_current_user
+        from deeptutor.services.path_service import get_path_service
+        from deeptutor.services.session.scope import StoreScope, store_scope
+
+        user = get_current_user()
+        scope = getattr(store, "store_scope", None)
+        if not isinstance(scope, StoreScope):
+            scope = store_scope(store)
+        if isinstance(scope, StoreScope) and scope.owner_id != user.id:
+            # Admin-compatible stores are shared by admin identities, but a
+            # normal user must never operate a store whose physical SQLite
+            # path belongs to another scope.
+            if scope.backend != "sqlite" or not user.is_admin:
+                raise PermissionError("Session store is not available in this scope")
+        db_path = getattr(store, "db_path", None)
+        if db_path is not None and not user.is_admin:
+            expected = get_path_service().get_chat_history_db().resolve()
+            if Path(db_path).resolve() != expected:
+                raise PermissionError("Session store is not available in this scope")
+
+    async def get_turn(self, turn_id: str) -> dict[str, Any] | None:
+        """Authorize before allocating a subscription or touching coordination."""
+        store = self.store_provider.get()
+        self._assert_store_scope(store)
+        return await store.get_turn(turn_id)
 
     async def start_turn(
         self, payload: TurnRequest | dict[str, Any]
@@ -107,7 +137,10 @@ class TurnApplicationService:
         turn_id: str,
         after_seq: int = 0,
     ) -> AsyncIterator[dict[str, Any]]:
-        store, _runtime = self._resolve()
+        store = self.store_provider.get()
+        self._assert_store_scope(store)
+        if await store.get_turn(turn_id) is None:
+            return
         last_seq = max(0, int(after_seq))
         done = False
         tail_possible = False
@@ -218,8 +251,7 @@ class TurnApplicationService:
         }
 
     async def cancel_turn(self, turn_id: str, *, command_id: str | None = None) -> bool:
-        store, _runtime = self._resolve()
-        turn = await store.get_turn(turn_id)
+        turn = await self.get_turn(turn_id)
         if turn is None or turn.get("status") not in {
             "queued",
             "running",
@@ -247,6 +279,8 @@ class TurnApplicationService:
         answers: list[dict[str, Any]] | None = None,
         command_id: str | None = None,
     ) -> bool:
+        if await self.get_turn(turn_id) is None:
+            return False
         if await self.coordinator.get_lease(turn_id) is None:
             # Nobody owns the turn: a queued command would never be read. If
             # the durable row still says ``waiting_input`` it is a zombie —
@@ -385,6 +419,8 @@ class TurnApplicationService:
         *,
         command_id: str | None = None,
     ) -> bool:
+        if await self.get_turn(turn_id) is None:
+            return False
         if await self.coordinator.get_lease(turn_id) is None:
             return False
         await self.coordinator.submit_command(

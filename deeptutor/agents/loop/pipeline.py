@@ -660,6 +660,16 @@ class AgenticLoopPipeline:
             is_partner = self._is_partner_turn(context)
 
             level = await get_sandbox_service().isolation_level()
+            if not is_partner:
+                from deeptutor.multi_user.context import get_current_user
+
+                # The compose runner is mounted for the administrator's
+                # compatibility workspace only.  A SYSTEM backend by itself
+                # is not per-user storage isolation, so ordinary accounts do
+                # not get an exec tool until a deployment supplies a private
+                # runner/workdir contract.
+                if not get_current_user().is_admin:
+                    return False
             if level is IsolationLevel.SYSTEM:
                 # Admin can switch exec off per user (grant v2). ``None``
                 # follows the policy: SYSTEM isolation serves everyone.

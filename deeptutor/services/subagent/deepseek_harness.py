@@ -77,6 +77,11 @@ class DeepSeekHarnessBackend(SubagentBackend):
         images: list[str] | None = None,
         partner_id: str | None = None,  # noqa: ARG002 — partner-only
     ) -> ConsultResult:
+        # The SDK path does not go through ``stream_process_lines`` but still
+        # runs a host-local agent and inherits the process environment.
+        from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+        assert_local_subagent_execution_allowed()
         config = config or BackendConfig()
         if _sdk_available():
             return await self._consult_sdk(

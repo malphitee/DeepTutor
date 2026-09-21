@@ -99,9 +99,13 @@ class NotebookManager:
         else:
             base_dir_path = Path(base_dir)
 
-        self.base_dir = base_dir_path
+        if base_dir_path.exists() and base_dir_path.is_symlink():
+            raise ValueError("Notebook root cannot be a symbolic link")
+        self.base_dir = base_dir_path.resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index_file = self.base_dir / "notebooks_index.json"
+        if self.index_file.is_symlink():
+            raise ValueError("Notebook index cannot be a symbolic link")
         # One re-entrant lock per notebook, plus one for the shared index.
         # Every read-modify-write cycle below runs under the matching lock so
         # two concurrent saves cannot both load the same revision and clobber
@@ -145,7 +149,7 @@ class NotebookManager:
         """Reconstruct index rows by scanning the notebook files on disk."""
         entries: list[dict] = []
         for path in sorted(self.base_dir.glob("*.json")):
-            if path == self.index_file:
+            if path == self.index_file or path.is_symlink():
                 continue
             try:
                 with open(path, encoding="utf-8") as f:
@@ -173,7 +177,26 @@ class NotebookManager:
         atomic_write_json(self.index_file, index)
 
     def _get_notebook_file(self, notebook_id: str) -> Path:
-        return self.base_dir / f"{notebook_id}.json"
+        value = str(notebook_id or "")
+        if (
+            not value
+            or value in {".", ".."}
+            or Path(value).is_absolute()
+            or Path(value).name != value
+            or "/" in value
+            or "\\" in value
+            or "\x00" in value
+        ):
+            raise ValueError("Invalid notebook path component")
+        raw = self.base_dir / f"{value}.json"
+        if raw.is_symlink():
+            raise ValueError("Notebook file cannot be a symbolic link")
+        resolved = raw.resolve()
+        try:
+            resolved.relative_to(self.base_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("Notebook path leaves its root") from exc
+        return resolved
 
     def _load_notebook(self, notebook_id: str) -> dict | None:
         """Return the notebook, or ``None`` when no such file exists.
@@ -287,7 +310,9 @@ class NotebookManager:
             rows = {str(row.get("id")): row for row in index.get("notebooks", []) if row.get("id")}
 
             on_disk = {
-                path.stem for path in self.base_dir.glob("*.json") if path != self.index_file
+                path.stem
+                for path in self.base_dir.glob("*.json")
+                if path != self.index_file and not path.is_symlink()
             }
             # Drop rows whose file is gone; adopt files the index never learned
             # about. Only the unknown files are parsed — indexed ones are taken
@@ -690,8 +715,8 @@ _instances: dict[str, NotebookManager] = {}
 
 
 def get_notebook_manager() -> NotebookManager:
-    base_dir = get_path_service().get_notebook_dir().resolve()
-    key = str(base_dir)
+    base_dir = get_path_service().get_notebook_dir()
+    key = str(base_dir.resolve())
     if key not in _instances:
         _instances[key] = NotebookManager(base_dir=str(base_dir))
     return _instances[key]

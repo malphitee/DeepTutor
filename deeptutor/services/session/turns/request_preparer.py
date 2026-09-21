@@ -170,6 +170,23 @@ class TurnRequestPreparer:
         except PermissionError as exc:
             raise RuntimeError(str(exc)) from exc
 
+        # ``math_animator`` and the Manim branch of ``visualize`` execute
+        # generated Python through a renderer subprocess rather than through
+        # the normal exec-tool gate.  Reject ordinary users before allocating
+        # a coordinator lease or persisting a turn.  The renderer repeats the
+        # check immediately before Popen for direct capability callers.
+        try:
+            from deeptutor.multi_user.execution_access import (
+                assert_capability_execution_allowed,
+            )
+
+            assert_capability_execution_allowed(
+                capability,
+                render_mode=(raw_config.get("render_mode") if capability == "visualize" else None),
+            )
+        except PermissionError as exc:
+            raise RuntimeError(str(exc)) from exc
+
         if workspace_mode == WORKSPACE_MODE_WATCHING:
             from deeptutor.video_learning import get_timed_media_store
 
@@ -628,6 +645,15 @@ class TurnRequestPreparer:
             )
             async with self._lock:
                 execution.task = asyncio.create_task(self._run_turn(execution))
+                # Account revocation cancels the in-process turn immediately;
+                # the durable token-version check covers reconnecting clients.
+                from deeptutor.multi_user.context import get_current_user
+                from deeptutor.multi_user.revocation import register
+
+                execution.revocation_handle = register(
+                    get_current_user().id,
+                    execution.task.cancel,
+                )
                 if execution.lease is not None and self.coordinator is not None:
                     execution.coordination_task = asyncio.create_task(
                         self._coordinate_execution(execution)

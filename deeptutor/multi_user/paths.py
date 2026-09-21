@@ -45,6 +45,13 @@ _legacy_migration_lock = threading.Lock()
 _legacy_migration_done = False
 
 
+def _reject_symlink(path: Path, label: str) -> None:
+    """Fail closed when a security-sensitive storage root is a link."""
+
+    if path.is_symlink():
+        raise PermissionError(f"{label} cannot be a symbolic link")
+
+
 def migrate_legacy_multi_user_tree() -> None:
     """One-time move of the pre-v1.5 sibling ``multi-user/`` tree into ``data/``.
 
@@ -61,13 +68,23 @@ def migrate_legacy_multi_user_tree() -> None:
     with _legacy_migration_lock:
         if _legacy_migration_done:
             return
-        _legacy_migration_done = True
         legacy = LEGACY_MULTI_USER_ROOT
+        # ``shutil.move`` would move a symlink itself.  That would turn a
+        # legacy link into a live tenant/system link under ``data`` and make
+        # every later path check too late, so reject the tree before touching
+        # any child.
+        _reject_symlink(legacy, "Legacy multi-user root")
+        _reject_symlink(ADMIN_WORKSPACE_ROOT, "Admin workspace root")
+        _reject_symlink(USERS_ROOT, "Users root")
+        _reject_symlink(SYSTEM_ROOT, "System root")
         if not legacy.is_dir():
+            _legacy_migration_done = True
             return
         leftovers: list[str] = []
         for child in sorted(legacy.iterdir()):
+            _reject_symlink(child, "Legacy multi-user entry")
             target = SYSTEM_ROOT if child.name == "_system" else USERS_ROOT / child.name
+            _reject_symlink(target, "Migration target")
             if target.exists():
                 leftovers.append(child.name)
                 continue
@@ -79,11 +96,13 @@ def migrate_legacy_multi_user_tree() -> None:
                 "Legacy multi-user tree partially migrated; reconcile by hand: %s",
                 ", ".join(str(legacy / name) for name in leftovers),
             )
+            _legacy_migration_done = True
             return
         try:
             legacy.rmdir()
         except OSError:
             logger.warning("Could not remove legacy multi-user root %s", legacy)
+        _legacy_migration_done = True
 
 
 def admin_scope() -> UserScope:
@@ -103,7 +122,32 @@ def scope_for_user(user_id: str, *, is_admin: bool) -> UserScope:
     if is_admin:
         return admin_scope()
     migrate_legacy_multi_user_tree()
-    return UserScope(kind="user", user_id=user_id, root=(USERS_ROOT / user_id).resolve())
+    raw_root = USERS_ROOT / str(user_id)
+    # The account id comes from the identity store, but token adapters and
+    # restore tools can still hand this function arbitrary text. Keep it to one
+    # path component and reject an account directory replaced by a symlink;
+    # resolving first would silently turn it into another user's workspace.
+    if (
+        not str(user_id)
+        or str(user_id) in {".", ".."}
+        or Path(str(user_id)).name != str(user_id)
+        or "/" in str(user_id)
+        or "\\" in str(user_id)
+        or "\x00" in str(user_id)
+    ):
+        raise PermissionError("Invalid user workspace id")
+    for parent in (ADMIN_WORKSPACE_ROOT, USERS_ROOT):
+        if parent.is_symlink():
+            raise PermissionError("User workspace root cannot be a symbolic link")
+    if raw_root.is_symlink():
+        raise PermissionError("User workspace cannot be a symbolic link")
+    users_root = USERS_ROOT.resolve()
+    root = raw_root.resolve()
+    try:
+        root.relative_to(users_root)
+    except ValueError as exc:
+        raise PermissionError("User workspace leaves the users root") from exc
+    return UserScope(kind="user", user_id=user_id, root=root)
 
 
 def ensure_user_workspace(user_id: str) -> Path:
@@ -118,6 +162,8 @@ def ensure_scope_workspace(scope: UserScope) -> Path:
     elsewhere — e.g. partner workspaces under ``data/partners/<id>/workspace``.
     For regular users both paths are identical.
     """
+    if scope.root.is_symlink():
+        raise PermissionError("User workspace cannot be a symbolic link")
     root = scope.root.resolve()
     PathService(workspace_root=root).ensure_all_directories()
     (root / "knowledge_bases").mkdir(parents=True, exist_ok=True)
@@ -127,13 +173,22 @@ def ensure_scope_workspace(scope: UserScope) -> Path:
 
 def ensure_system_dirs() -> None:
     migrate_legacy_multi_user_tree()
+    _reject_symlink(ADMIN_WORKSPACE_ROOT, "Admin workspace root")
+    _reject_symlink(SYSTEM_ROOT, "System root")
+    SYSTEM_ROOT.mkdir(parents=True, exist_ok=True)
+    _reject_symlink(SYSTEM_ROOT, "System root")
     for child in ("auth", "grants", "audit", "indexes"):
-        (SYSTEM_ROOT / child).mkdir(parents=True, exist_ok=True)
+        child_path = SYSTEM_ROOT / child
+        _reject_symlink(child_path, f"System {child} directory")
+        child_path.mkdir(parents=True, exist_ok=True)
+        _reject_symlink(child_path, f"System {child} directory")
     # Per-owner secrets (see ``get_owner_secrets_dir``). Declared here, and its
     # mode set once at startup, so the per-request path only has to create the
     # one owner directory below it.
     secrets_root = SYSTEM_ROOT / USER_SECRETS_DIRNAME
+    _reject_symlink(secrets_root, "System user-secrets directory")
     secrets_root.mkdir(parents=True, exist_ok=True)
+    _reject_symlink(secrets_root, "System user-secrets directory")
     os.chmod(secrets_root, stat.S_IRWXU)
 
 
@@ -151,10 +206,11 @@ def get_admin_path_service() -> PathService:
 
 
 def get_current_path_service() -> PathService:
-    from .context import get_current_user_or_none
+    from .context import get_current_user, get_current_user_or_none
 
     user = get_current_user_or_none()
     if user is None:
+        get_current_user()  # Reject an unauthenticated request, including public routes.
         return PathService.get_instance()
     if user.scope.kind == "user":
         ensure_scope_workspace(user.scope)
@@ -175,11 +231,11 @@ def _resolve_owner() -> tuple[str, PathService]:
     """
     from deeptutor.services.partners.scope import is_partner_user_id
 
-    from .context import get_current_user_or_none
+    from .context import get_current_user, get_current_user_or_none
 
     user = get_current_user_or_none()
     if user is None:
-        # No request scope: CLI runs and background jobs act as the deployment.
+        get_current_user()  # A missing HTTP/WS scope cannot resolve owner secrets.
         return LOCAL_ADMIN_ID, PathService.get_instance()
     if is_partner_user_id(user.id):
         # A partner is a synthetic user, not a person: it has a workspace but no
@@ -217,16 +273,51 @@ def owner_secrets_dir(owner_id: str) -> Path:
     whoever happens to be current.
     """
     # SYSTEM_ROOT is read per call so a monkey-patched root (tests) is honored.
+    # The id is an identity key, never a user-controlled filesystem path.  A
+    # caller can reach this helper from an MCP/device callback outside the
+    # normal HTTP router, so do not rely on the account store having validated
+    # it first.
+    owner_component = str(owner_id or LOCAL_ADMIN_ID)
+    if (
+        not owner_component
+        or owner_component in {".", ".."}
+        or Path(owner_component).name != owner_component
+        or "/" in owner_component
+        or "\\" in owner_component
+        or "\x00" in owner_component
+    ):
+        raise PermissionError("Invalid owner id for secrets directory")
+
     secrets_root = SYSTEM_ROOT / USER_SECRETS_DIRNAME
-    owner_dir = secrets_root / (owner_id or LOCAL_ADMIN_ID)
+    # Never follow a link at either the private root or the owner leaf.  The
+    # check is intentionally repeated after mkdir: a restore/operator action
+    # may replace a directory with a link between calls, and resolving first
+    # would make that attack look like a valid owner directory.
+    if SYSTEM_ROOT.is_symlink() or secrets_root.is_symlink():
+        raise PermissionError("Owner secrets root cannot be a symbolic link")
+    secrets_root.mkdir(parents=True, exist_ok=True)
+    if secrets_root.is_symlink():
+        raise PermissionError("Owner secrets root cannot be a symbolic link")
+
+    owner_dir = secrets_root / owner_component
+    if owner_dir.is_symlink():
+        raise PermissionError("Owner secrets directory cannot be a symbolic link")
     owner_dir.mkdir(parents=True, exist_ok=True)
+    if owner_dir.is_symlink():
+        raise PermissionError("Owner secrets directory cannot be a symbolic link")
+    secrets_root_resolved = secrets_root.resolve()
+    owner_resolved = owner_dir.resolve()
+    try:
+        owner_resolved.relative_to(secrets_root_resolved)
+    except ValueError as exc:
+        raise PermissionError("Owner secrets directory leaves the secrets root") from exc
     # Re-asserted rather than assumed from ``ensure_system_dirs``: this is the
     # only guarantee that holds when a directory was created by something else
     # (an operator, a restore, a caller that skipped startup), and the cost of
     # being wrong is a world-readable refresh token.
     for path in (secrets_root, owner_dir):
         os.chmod(path, stat.S_IRWXU)
-    return owner_dir.resolve()
+    return owner_resolved
 
 
 def get_owner_secrets_dir() -> Path:
@@ -242,12 +333,29 @@ def get_owner_secrets_dir() -> Path:
     Laid out like a user root (``private/<asset>/``) so a store written against
     one can be pointed here without changing what it knows about its own files.
     """
+    # Secret ownership is an identity decision, not a workspace traversal.
+    # Keep it independent from ``_resolve_owner``'s workspace validation so an
+    # operator may relocate a user's workspace with a symlink without making
+    # credential lookup either fall back to admin or follow that link.  Any
+    # actual workspace access still goes through ``get_current_path_service``
+    # / ``get_owner_path_service`` and remains fail-closed on symlink roots.
     return owner_secrets_dir(current_owner_id())
 
 
 def current_owner_id() -> str:
     """Id of the account owning the current scope (a partner's is its owner's)."""
-    return _resolve_owner()[0]
+    from deeptutor.services.partners.scope import is_partner_user_id
+
+    from .context import get_current_user, get_current_user_or_none
+
+    user = get_current_user_or_none()
+    if user is None:
+        # Do not silently turn an unauthenticated request into the admin owner.
+        get_current_user()
+        return LOCAL_ADMIN_ID
+    if is_partner_user_id(user.id):
+        return LOCAL_ADMIN_ID
+    return str(user.id or LOCAL_ADMIN_ID)
 
 
 @contextmanager

@@ -38,6 +38,15 @@ class RAGService:
 
                 kb_base_dir = str(get_path_service().get_knowledge_bases_root())
             except Exception:
+                # A request must never lose its authenticated path scope and
+                # silently continue against the administrator's knowledge
+                # base.  The compatibility fallback is still useful for
+                # startup and local CLI callers, which run outside the ASGI
+                # request boundary.
+                from deeptutor.multi_user.context import request_scope_active
+
+                if request_scope_active():
+                    raise
                 self.logger.warning(
                     "RAGService falling back to DEFAULT_KB_BASE_DIR (%s); "
                     "this should only happen in single-user / CLI mode. "

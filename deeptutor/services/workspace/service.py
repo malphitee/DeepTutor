@@ -128,10 +128,14 @@ class ContentWorkspaceService:
         return get_path_service().get_workspace_dir().resolve()
 
     def _deployment_root(self) -> Path | None:
+        if not get_current_user().is_admin:
+            return None
         raw = os.environ.get(_DEPLOYMENT_ROOT_ENV, "").strip()
         return Path(raw).expanduser().resolve() if raw else None
 
     def _allowed_roots(self) -> tuple[Path, ...]:
+        if not get_current_user().is_admin:
+            return (self._default_root(),)
         raw = os.environ.get(_ALLOWED_ROOTS_ENV, "")
         roots = [
             Path(value).expanduser().resolve() for value in raw.split(os.pathsep) if value.strip()
@@ -188,10 +192,19 @@ class ContentWorkspaceService:
                 if not isinstance(row, dict) or str(row.get("id") or "") != active_id:
                     continue
                 raw_path = str(row.get("path") or "").strip()
-                if raw_path:
-                    root = Path(raw_path).expanduser().resolve()
-                    binding = self._binding(root, is_default=root == self._default_root())
+                if not raw_path:
+                    raise WorkspaceError("The workspace is no longer registered for this user.")
+                self._assert_no_symlink_path(Path(raw_path).expanduser())
+                root = Path(raw_path).expanduser().resolve()
+                self._assert_allowed_root(root)
+                binding = self._binding(root, is_default=root == self._default_root())
+                if binding.workspace_id != active_id:
+                    raise WorkspaceError("The workspace is no longer registered for this user.")
                 break
+            else:
+                if active_id:
+                    raise WorkspaceError("The active workspace is not registered.")
+        self._assert_allowed_root(binding.root)
         if ensure_output:
             self._ensure_ready(binding)
         return binding
@@ -207,7 +220,9 @@ class ContentWorkspaceService:
         for row in self._read_settings().get("bindings") or []:
             if not isinstance(row, dict) or str(row.get("id") or "") != workspace_id:
                 continue
-            root = Path(str(row.get("path") or "")).expanduser().resolve()
+            raw_path = Path(str(row.get("path") or "")).expanduser()
+            self._assert_no_symlink_path(raw_path)
+            root = raw_path.resolve()
             self._assert_allowed_root(root)
             binding = self._binding(root, is_default=root == self._default_root())
             # Binding ids are derived from both the user id and the physical
@@ -235,6 +250,9 @@ class ContentWorkspaceService:
 
     def _ensure_ready(self, binding: WorkspaceBinding) -> None:
         root = binding.root
+        self._assert_allowed_root(root)
+        if binding.is_default:
+            ensure_private_directory(root)
         if not root.exists() or not root.is_dir():
             raise WorkspaceError("The selected workspace folder does not exist.")
         self._assert_allowed_root(root)
@@ -263,7 +281,9 @@ class ContentWorkspaceService:
         binding = (
             self.default_binding()
             if path is None
-            else self._binding(Path(path).expanduser().resolve(), is_default=False)
+            else self._binding(
+                self._checked_requested_root(Path(path).expanduser()), is_default=False
+            )
         )
         try:
             self._ensure_ready(binding)
@@ -282,7 +302,9 @@ class ContentWorkspaceService:
         binding = (
             self.default_binding()
             if path is None
-            else self._binding(Path(path).expanduser().resolve(), is_default=False)
+            else self._binding(
+                self._checked_requested_root(Path(path).expanduser()), is_default=False
+            )
         )
         self._ensure_ready(binding)
 
@@ -311,6 +333,24 @@ class ContentWorkspaceService:
 
         atomic_update(self._settings_file(), _mutate)
         return binding
+
+    def _checked_requested_root(self, path: Path) -> Path:
+        self._assert_no_symlink_path(path)
+        return path.resolve()
+
+    def _assert_no_symlink_path(self, path: Path) -> None:
+        """Reject user-selected roots containing a symlink component."""
+
+        if get_current_user().is_admin:
+            return
+        probe = path if path.is_absolute() else (Path.cwd() / path)
+        while True:
+            if probe.is_symlink():
+                raise WorkspaceError("Workspace paths cannot contain symbolic links.")
+            parent = probe.parent
+            if parent == probe:
+                break
+            probe = parent
 
     def describe_current(self) -> dict[str, Any]:
         binding = self.current_binding()
@@ -352,6 +392,7 @@ class ContentWorkspaceService:
         self, binding: WorkspaceBinding, relative_path: str, *, write: bool = False
     ) -> Path:
         relative = _normalise_relative(relative_path)
+        self._assert_no_symlink_components(binding, relative, operation="workspace")
         if write and PurePosixPath(relative).parts[0] != "outputs":
             raise WorkspaceError("Writes outside outputs require an explicit user grant.")
         candidate = (binding.root / Path(*PurePosixPath(relative).parts)).resolve()
@@ -367,7 +408,9 @@ class ContentWorkspaceService:
             relative = candidate.relative_to(binding.root)
         except ValueError as exc:
             raise WorkspaceError("The path is outside the selected workspace.") from exc
-        return PurePosixPath(*relative.parts).as_posix()
+        value = PurePosixPath(*relative.parts).as_posix()
+        self._assert_no_symlink_components(binding, value, operation="workspace")
+        return value
 
     @staticmethod
     def _assert_no_symlink_components(
@@ -377,6 +420,10 @@ class ContentWorkspaceService:
         for part in PurePosixPath(relative_path).parts:
             cursor /= part
             if cursor.is_symlink():
+                try:
+                    cursor.resolve().relative_to(binding.root)
+                except ValueError as exc:
+                    raise WorkspaceError(f"The {operation} path leaves the workspace.") from exc
                 raise WorkspaceError(f"The {operation} path cannot contain symbolic links.")
 
     @staticmethod

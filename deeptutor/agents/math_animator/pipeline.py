@@ -154,6 +154,13 @@ class MathAnimatorPipeline:
         on_render_progress: Callable[[str, bool], Any] | None = None,
         on_retry_status: Callable[[str], Any] | None = None,
     ) -> tuple[str, RenderResult]:
+        from deeptutor.multi_user.execution_access import assert_manim_execution_allowed
+
+        # Direct pipeline callers (for example book generation) do not pass
+        # through the turn preparer.  Refuse before creating a renderer or
+        # writing generated code, while the renderer repeats the check before
+        # launching the subprocess.
+        assert_manim_execution_allowed()
         renderer = ManimRenderService(
             turn_id,
             progress_callback=on_render_progress,
@@ -265,6 +272,11 @@ class MathAnimatorPipeline:
         request_config: MathAnimatorRequestConfig,
         attachments: list[Attachment],
     ) -> dict[str, Any]:
+        from deeptutor.multi_user.execution_access import assert_manim_execution_allowed
+
+        # Keep the complete convenience pipeline subject to the same account
+        # policy as the capability entry point.
+        assert_manim_execution_allowed()
         timings: dict[str, float] = {}
 
         start = time.perf_counter()

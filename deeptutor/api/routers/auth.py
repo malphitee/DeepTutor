@@ -59,6 +59,7 @@ from deeptutor.services.auth import (
     list_users,
     register_pb,
     set_avatar,
+    set_disabled,
     set_learner_profile,
     set_role,
 )
@@ -74,6 +75,31 @@ router = APIRouter()
 
 _COOKIE_NAME = "dt_token"
 _COOKIE_MAX_AGE = TOKEN_EXPIRE_HOURS * 3600
+
+
+async def _terminate_revoked_user(user_id: str, *, previous_role: str = "user") -> None:
+    """Stop live turns in the current worker after an account mutation."""
+
+    # Signal sockets and execution tasks before trying to enumerate their
+    # stores.  The latter can fail during shutdown or after a deleted account,
+    # while this process-local fan-out is cheap and independent of the store.
+    try:
+        from deeptutor.multi_user.revocation import revoke
+
+        revoke(user_id)
+    except Exception:
+        logger.exception("Failed to signal live resources for revoked user %s", user_id)
+    try:
+        from deeptutor.app.container import get_application_container
+
+        container = get_application_container()
+        if getattr(container, "_started", False):
+            await container.revoke_user_turns(user_id, previous_role=previous_role)
+    except Exception:
+        # Identity/token revocation is already durable.  A worker that cannot
+        # enumerate its runtime must still reject the next request and the
+        # revocation registry still closes local sockets/tasks.
+        logger.exception("Failed to terminate live turns for revoked user %s", user_id)
 
 
 def _cookie_attrs() -> dict:
@@ -163,6 +189,12 @@ class SetRoleRequest(BaseModel):
         if v not in ("admin", "user"):
             raise ValueError("Role must be 'admin' or 'user'")
         return v
+
+
+class SetDisabledRequest(BaseModel):
+    """Payload for enabling or disabling a local account."""
+
+    disabled: bool
 
 
 class AdminCreateUserRequest(RegisterRequest):
@@ -374,7 +406,51 @@ async def ws_require_auth(ws: WebSocket) -> _CtxToken | _WsAuthFailed:
         await ws.close(code=4001)
         return ws_auth_failed
 
-    return _install_current_user(payload)
+    context_token = _install_current_user(payload)
+    # Keep every authenticated WebSocket revocable, including legacy progress,
+    # book, question, and mastery sockets that do not use the unified-turn
+    # adapter.  The request-scope middleware performs the matching cleanup
+    # when the handler returns.
+    try:
+        import asyncio
+
+        from deeptutor.multi_user.context import get_current_user
+        from deeptutor.multi_user.revocation import register
+
+        revoked = asyncio.Event()
+        handle = register(get_current_user().id, revoked.set)
+
+        async def close_when_revoked() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(revoked.wait(), timeout=2.0)
+                    break
+                except asyncio.TimeoutError:
+                    # The registry is process-local.  Revalidate the signed
+                    # token as well so a socket on another worker notices a
+                    # durable role/disable/delete mutation.
+                    if decode_token(token) is None:
+                        break
+            try:
+                await ws.close(code=4003, reason="Account access revoked")
+            except Exception:
+                pass
+
+        ws.scope["deeptutor.revocation"] = (handle, asyncio.create_task(close_when_revoked()))
+    except Exception:
+        # Authentication succeeded, but a best-effort watcher cannot be
+        # allowed to turn into a new access decision or break the socket setup.
+        # Durable token validation still protects subsequent connections.
+        logger.warning("Could not install WebSocket revocation watcher", exc_info=True)
+    return context_token
+
+
+async def cleanup_ws_auth(scope: dict) -> None:
+    """Unregister the live-account watcher installed by ``ws_require_auth``."""
+
+    from deeptutor.multi_user.revocation import cleanup_websocket
+
+    await cleanup_websocket(scope)
 
 
 async def require_admin(
@@ -1216,12 +1292,14 @@ async def remove_user(
 
     # Capture the id before the record disappears so the avatar file can go too.
     info = get_user_info(username)
+    user_id = str(info.get("id") or "") if info else ""
+    previous_role = str(info.get("role") or "user") if info else "user"
 
     removed = delete_user(username)
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    user_id = str(info.get("id") or "") if info else ""
+    await _terminate_revoked_user(user_id, previous_role=previous_role)
     if user_id and _USER_ID_RE.match(user_id):
         from deeptutor.multi_user.identity import delete_avatar_file
 
@@ -1244,6 +1322,9 @@ async def update_user_role(
             detail="You cannot change your own role",
         )
 
+    info = get_user_info(username)
+    user_id = str(info.get("id") or "") if info else ""
+    previous_role = str(info.get("role") or "user") if info else "user"
     updated = set_role(username, body.role)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -1251,4 +1332,36 @@ async def update_user_role(
     logger.info(
         f"Admin '{current.username if current else 'local'}' set '{username}' role to {body.role!r}"
     )
+    await _terminate_revoked_user(user_id, previous_role=previous_role)
     return {"ok": True, "username": username, "role": body.role}
+
+
+@router.put("/users/{username}/disabled", status_code=status.HTTP_200_OK)
+async def update_user_disabled(
+    username: str,
+    body: SetDisabledRequest,
+    current: TokenPayload = Depends(require_admin),
+) -> dict:
+    """Disable/enable an account and invalidate its existing sessions."""
+
+    if current and username == current.username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot disable your own account",
+        )
+    if POCKETBASE_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PocketBase is not supported for multi-user accounts",
+        )
+    info = get_user_info(username)
+    user_id = str(info.get("id") or "") if info else ""
+    previous_role = str(info.get("role") or "user") if info else "user"
+    updated = set_disabled(username, body.disabled)
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    logger.info(
+        "Admin '%s' set '%s' disabled=%s", current.username if current else "local", username, body.disabled
+    )
+    await _terminate_revoked_user(user_id, previous_role=previous_role)
+    return {"ok": True, "username": username, "disabled": body.disabled}

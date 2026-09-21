@@ -153,12 +153,25 @@ class ReadingStore:
         store against a temp dir without booting the path service, and so a
         per-user path service installed after construction is still honoured.
         """
-        if self._root_override is not None:
-            return self._root_override
-        return get_path_service().get_workspace_feature_dir("reading")
+        root = (
+            self._root_override
+            if self._root_override is not None
+            else get_path_service().get_workspace_feature_dir("reading")
+        )
+        if root.exists() and root.is_symlink():
+            raise ReadingError("reading workspace cannot be a symbolic link")
+        return root
 
     def _dir(self, material_id: str) -> Path:
-        return self.root / self._content_id(material_id)
+        root = self.root
+        content_dir = root / self._content_id(material_id)
+        if content_dir.is_symlink():
+            raise ReadingError("reading material cannot be a symbolic link")
+        try:
+            content_dir.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ReadingError("reading material leaves its workspace") from exc
+        return content_dir
 
     @staticmethod
     def _validate_id(material_id: str) -> str:
@@ -169,6 +182,8 @@ class ReadingStore:
 
     def _catalog_row(self, material_id: str) -> sqlite3.Row | None:
         db_path = self.root / "_catalog.sqlite3"
+        if db_path.is_symlink():
+            raise ReadingError("reading catalog cannot be a symbolic link")
         if not db_path.is_file():
             return None
         try:
@@ -515,11 +530,11 @@ class ReadingStore:
         """List immutable prior manifests, oldest first."""
         self.manifest(material_id)
         root = self._dir(material_id) / REVISIONS_DIR
-        if not root.is_dir():
+        if root.is_symlink() or not root.is_dir():
             return []
         rows: list[MaterialManifest] = []
         for child in sorted(root.iterdir()):
-            if not child.is_dir() or not re.fullmatch(r"\d{6}", child.name):
+            if child.is_symlink() or not child.is_dir() or not re.fullmatch(r"\d{6}", child.name):
                 continue
             data = _read_json(child / MANIFEST_NAME)
             if isinstance(data, dict):
@@ -600,7 +615,7 @@ class ReadingStore:
             return []
         found: list[MaterialManifest] = []
         for child in root.iterdir():
-            if not child.is_dir() or not _CONTENT_ID_RE.fullmatch(child.name):
+            if child.is_symlink() or not child.is_dir() or not _CONTENT_ID_RE.fullmatch(child.name):
                 continue
             manifest = self._load_manifest(child.name)
             if manifest is not None:
@@ -753,10 +768,10 @@ class ReadingStore:
     @staticmethod
     def _find_raw(material_dir: Path) -> Path | None:
         raw_dir = material_dir / RAW_DIR
-        if not raw_dir.is_dir():
+        if raw_dir.is_symlink() or not raw_dir.is_dir():
             return None
         for candidate in sorted(raw_dir.iterdir()):
-            if candidate.is_file():
+            if not candidate.is_symlink() and candidate.is_file():
                 return candidate
         return None
 
@@ -771,8 +786,11 @@ class ReadingStore:
         name = str(asset_name or "").strip().lower()
         if not re.fullmatch(r"(?:[0-9a-f]{20}|cover)\.(?:png|jpg|gif|webp)", name):
             return None
-        path = self._dir(material_id) / ASSETS_DIR / name
-        return path if path.is_file() else None
+        assets_dir = self._dir(material_id) / ASSETS_DIR
+        if assets_dir.is_symlink():
+            return None
+        path = assets_dir / name
+        return path if not path.is_symlink() and path.is_file() else None
 
     @contextmanager
     def staged_delete(self, material_id: str) -> Iterator[bool]:
@@ -815,7 +833,7 @@ class ReadingStore:
         resolved_content = str(content_id or "").strip().lower() or self._content_id(resolved_id)
         if not _CONTENT_ID_RE.fullmatch(resolved_content):
             raise ReadingError(f"invalid content id for material {material_id!r}")
-        content_dir = self.root / resolved_content
+        content_dir = self._dir(resolved_content)
         with self._locked(resolved_content):
             for state_dir in (ANNOTATIONS_DIR, POSITIONS_DIR):
                 state_path = content_dir / state_dir / f"{resolved_id}.json"
@@ -1052,11 +1070,11 @@ def _carry_dir(source: Path, target: Path) -> None:
     copying it would double a large file on disk for no reason. Falls back to a
     real copy across filesystems, where linking is not available.
     """
-    if not source.is_dir():
+    if source.is_symlink() or not source.is_dir():
         return
     target.mkdir(parents=True, exist_ok=True)
     for entry in source.iterdir():
-        if not entry.is_file():
+        if entry.is_symlink() or not entry.is_file():
             continue
         destination = target / entry.name
         if destination.exists():

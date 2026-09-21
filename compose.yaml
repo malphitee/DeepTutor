@@ -34,7 +34,8 @@
 #   * Host-side port bindings are LOOPBACK ONLY (127.0.0.1:). Drop the
 #     `127.0.0.1:` prefix to expose on all interfaces.
 #   * Two services: `deeptutor` (backend+frontend in one GHCR image, run
-#     under supervisord) and `pocketbase` (optional auth/storage sidecar).
+#     under supervisord). The legacy PocketBase sidecar is profile-gated and
+#     is not part of the built-in multi-user deployment.
 #     The sandbox-runner sidecar from docker-compose.yml is intentionally
 #     NOT included: the main app falls back to bwrap (Linux, if installed
 #     in the image) or the restricted subprocess backend controlled by
@@ -83,12 +84,11 @@ services:
       retries: 10
 
   # ----------------------------------------------------------
-  # PocketBase — optional auth + storage sidecar
+  # PocketBase — legacy single-user compatibility only. It is profile-gated
+  # and cannot be combined with built-in multi-user authentication.
   # ----------------------------------------------------------
-  # Activated by setting `integrations.pocketbase_url` to
-  # `http://pocketbase:8090` in data/user/settings/integrations.json.
-  # Leave blank to run with the SQLite fallback (single-user / invite-only).
   pocketbase:
+    profiles: ["legacy-pocketbase"]
     image: ghcr.io/muchobien/pocketbase:latest
     container_name: deeptutor-pocketbase
     pull_policy: always
@@ -172,8 +172,9 @@ services:
       # (data/partners), accounts/grants/audit (data/system),
       # knowledge bases, memory, logs. One tree to back up.
       - ./data:/app/data:U
-      # Stable content workspace shared by every installation path. Override
-      # the host side with DEEPTUTOR_WORKSPACE_HOST=/absolute/folder.
+      # Stable admin/single-user compatibility workspace. Ordinary authenticated
+      # users use data/users/<uid> and are denied host execution. Override the
+      # admin host side with DEEPTUTOR_WORKSPACE_HOST=/absolute/folder.
       - ${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}:/workspace:U
     environment:
       # Time zone — picked up by Python (time.tzset) and Next.js at boot.
@@ -184,9 +185,6 @@ services:
       # data/user/settings/model_catalog.json should use
       # `http://host.containers.internal:PORT` (podman) — NOT localhost,
       # which inside the container is the container's own loopback.
-      # Uncomment to enable PocketBase auth (also set integrations.json):
-      #   - POCKETBASE_URL=http://pocketbase:8090
-      #   - POCKETBASE_EXTERNAL_URL=http://localhost:8090
     healthcheck:
       test:
         - CMD
@@ -199,8 +197,6 @@ services:
       start_period: 60s
     depends_on:
       redis:
-        condition: service_healthy
-      pocketbase:
         condition: service_healthy
     networks:
       - deeptutor

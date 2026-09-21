@@ -130,6 +130,24 @@ def test_connect_rejects_unknown_kind(client):
     assert res.status_code == 400
 
 
+def test_ordinary_local_cli_connection_is_denied(client, monkeypatch):
+    """The app must not launch host-local agent CLIs for ordinary accounts."""
+
+    def deny():
+        raise PermissionError("local subagents require isolated execution")
+
+    monkeypatch.setattr(
+        "deeptutor.multi_user.execution_access.assert_local_subagent_execution_allowed",
+        deny,
+    )
+    res = client.post(
+        "/api/subagents/connections",
+        json={"name": "MyClaude", "agent_kind": "claude_code"},
+    )
+    assert res.status_code == 403
+    assert client.get("/api/subagents/connections").json()["connections"] == []
+
+
 def test_connect_remote_backend_does_not_persist_a_local_cwd(client):
     created = client.post(
         "/api/subagents/connections",

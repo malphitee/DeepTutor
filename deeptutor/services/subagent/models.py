@@ -266,6 +266,9 @@ async def _kimi_options() -> BackendOptions:
 
 async def _list_cli_models(cli_command: str, *, refresh: bool = False) -> list[ModelOption]:
     """Parse ``<cli> models`` output — one ``provider/model`` slug per line."""
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
     cmd = [cli_command, "models"]
     if refresh:
         cmd.append("--refresh")
@@ -392,7 +395,19 @@ _PROVIDERS: dict[str, Callable[..., Awaitable[BackendOptions]]] = {
 
 async def list_backend_options() -> list[BackendOptions]:
     """Synced model/effort options for every backend (the /settings sync source)."""
-    results = await asyncio.gather(*(provider() for provider in _PROVIDERS.values()))
+    try:
+        from deeptutor.multi_user.context import get_current_user
+
+        ordinary_user = not get_current_user().is_admin
+    except Exception:
+        ordinary_user = False
+    providers = [
+        (kind, provider)
+        for kind, provider in _PROVIDERS.items()
+        if not ordinary_user
+        or not getattr(get_backend(kind), "local_cli", True)
+    ]
+    results = await asyncio.gather(*(provider() for _, provider in providers))
     return list(results)
 
 
@@ -404,6 +419,12 @@ async def sync_backend_options(kind: str) -> BackendOptions:
     CLI (a fresh read suffices), and the opencode family re-runs ``models
     --refresh``. The rest have nothing external to refresh.
     """
+    backend = get_backend(kind)
+    if backend is None or not getattr(backend, "local_cli", True):
+        raise ValueError(f"Unknown local agent backend: {kind!r}")
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
     if kind == "claude_code":
         from deeptutor.services.subagent.claude_models import sync_claude_models
 

@@ -37,6 +37,7 @@ _USERS_WRITE_LOCK = threading.Lock()
 AUTH_DIR = SYSTEM_ROOT / "auth"
 USERS_FILE = AUTH_DIR / "users.json"
 SECRET_FILE = AUTH_DIR / "auth_secret"
+REVOKED_USERS_FILE = AUTH_DIR / "revoked_users.json"
 LEGACY_USERS_FILE = PROJECT_ROOT / "data" / "user" / "auth_users.json"
 LEGACY_SECRET_FILE = PROJECT_ROOT / "data" / "user" / "auth_secret"
 
@@ -47,6 +48,19 @@ def new_user_id() -> str:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _token_version(value: Any, *, missing: int = 0) -> int:
+    """Read a bounded account incarnation counter from legacy JSON."""
+
+    if not isinstance(value, dict) or "token_version" not in value:
+        return missing
+    try:
+        return max(0, int(value.get("token_version", missing) or 0))
+    except (TypeError, ValueError):
+        # A malformed counter must not make the identity store unreadable. The
+        # conservative value is still replaced on the next state mutation.
+        return missing
 
 
 def _canonical_record(
@@ -60,6 +74,7 @@ def _canonical_record(
             "id": new_user_id(),
             "hash": value,
             "role": default_role,
+            "token_version": 0,
             "created_at": utc_now(),
             "disabled": False,
             "avatar": "",
@@ -79,6 +94,12 @@ def _canonical_record(
         "id": str(value.get("id") or new_user_id()),
         "hash": hashed,
         "role": role,
+        # Incremented whenever an account's authentication state changes.  It
+        # is part of every locally signed token, so a role/disable/password
+        # update invalidates already issued tokens without a token blacklist.
+        # Legacy records have no incarnation counter; start them at one so a
+        # pre-isolation token with an implicit version of zero is rejected.
+        "token_version": _token_version(value, missing=1),
         "created_at": str(value.get("created_at") or utc_now()),
         "disabled": bool(value.get("disabled", False)),
         "avatar": str(value.get("avatar") or ""),
@@ -103,6 +124,41 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_users(users: dict[str, dict[str, Any]]) -> None:
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(USERS_FILE, json.dumps(users, indent=2, ensure_ascii=False))
+
+
+def _revoke_user_runtime(user_id: str) -> None:
+    """Best-effort local fan-out after an authentication state mutation."""
+
+    if not user_id:
+        return
+    try:
+        from .revocation import revoke
+
+        revoke(user_id)
+    except Exception:
+        logger.exception("Could not revoke live resources for user %s", user_id)
+
+
+def _record_deleted_identity(username: str, user_id: str) -> None:
+    """Keep a tombstone so a token survives neither delete nor re-create."""
+
+    if not username:
+        return
+    revoked_file = AUTH_DIR / "revoked_users.json"
+    tombstones = _read_json(revoked_file)
+    tombstones[str(username)] = {"id": str(user_id or ""), "revoked_at": utc_now()}
+    revoked_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(revoked_file, json.dumps(tombstones, indent=2, ensure_ascii=False))
+
+
+def deleted_identity_revoked(username: str, user_id: str = "") -> bool:
+    """Whether a token refers to an account deleted in the past."""
+
+    row = _read_json(AUTH_DIR / "revoked_users.json").get(str(username))
+    if not isinstance(row, dict):
+        return False
+    old_id = str(row.get("id") or "")
+    return not user_id or not old_id or str(user_id) == old_id
 
 
 def _migrate_legacy_users() -> dict[str, dict[str, Any]] | None:
@@ -168,6 +224,7 @@ def _env_admin_record(password_hash: str) -> dict[str, Any]:
         "id": "env-admin",
         "hash": password_hash,
         "role": "admin",
+        "token_version": 0,
         "created_at": "",
         "disabled": False,
         "avatar": "",
@@ -251,6 +308,7 @@ def save_user(
             "id": str(existing.get("id") or new_user_id()),
             "hash": hashed_password,
             "role": effective_role,
+            "token_version": _token_version(existing),
             "created_at": str(existing.get("created_at") or utc_now()),
             "disabled": bool(existing.get("disabled", False)),
             "avatar": str(existing.get("avatar") or ""),
@@ -258,8 +316,15 @@ def save_user(
             "book_permission": canonical_book_permission(existing.get("book_permission")),
             "learner_profile": normalize_profile(existing.get("learner_profile")),
         }
+        credentials_changed = bool(existing) and (
+            existing.get("hash") != hashed_password or existing.get("role") != effective_role
+        )
+        if credentials_changed:
+            record["token_version"] += 1
         users[username] = record
         _write_users(users)
+    if credentials_changed:
+        _revoke_user_runtime(record["id"])
     return record
 
 
@@ -376,7 +441,9 @@ def delete_user(username: str) -> bool:
             return False
         user_id = str(record.get("id") or "")
         users.pop(username, None)
+        _record_deleted_identity(username, user_id)
         _write_users(users)
+    _revoke_user_runtime(user_id)
     try:
         from .guardians import revoke_relationships_for_user
 
@@ -398,8 +465,11 @@ def set_password(username: str, hashed_password: str) -> dict[str, Any] | None:
         if record is None:
             return None
         record["hash"] = hashed_password
+        record["token_version"] = _token_version(record) + 1
         _write_users(users)
-        return deepcopy(record)
+        updated = deepcopy(record)
+    _revoke_user_runtime(str(updated.get("id") or ""))
+    return updated
 
 
 def set_avatar(username: str, avatar: str) -> bool:
@@ -465,11 +535,37 @@ def set_role(username: str, role: Role) -> bool:
         raise ValueError("role must be 'admin' or 'user'")
     if not USERS_FILE.exists():
         return False
-    users = load_users()
-    if username not in users:
+    with _USERS_WRITE_LOCK:
+        users = load_users()
+        if username not in users:
+            return False
+        users[username]["role"] = role
+        users[username]["token_version"] = _token_version(users[username]) + 1
+        user_id = str(users[username].get("id") or "")
+        _write_users(users)
+    _revoke_user_runtime(user_id)
+    return True
+
+
+def set_disabled(username: str, disabled: bool) -> bool:
+    """Enable or disable an account and revoke its previously issued tokens."""
+
+    if not USERS_FILE.exists():
         return False
-    users[username]["role"] = role
-    _write_users(users)
+    with _USERS_WRITE_LOCK:
+        users = load_users()
+        record = users.get(username)
+        if record is None:
+            return False
+        disabled = bool(disabled)
+        if bool(record.get("disabled", False)) != disabled:
+            record["disabled"] = disabled
+            record["token_version"] = _token_version(record) + 1
+            user_id = str(record.get("id") or "")
+            _write_users(users)
+        else:
+            user_id = ""
+    _revoke_user_runtime(user_id)
     return True
 
 

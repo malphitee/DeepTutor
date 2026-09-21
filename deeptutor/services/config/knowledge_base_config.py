@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from deeptutor.knowledge.naming import validate_knowledge_base_name
 from deeptutor.services.path_service import get_path_service
 from deeptutor.services.rag.factory import (
     DEFAULT_PROVIDER,
@@ -12,7 +13,6 @@ from deeptutor.services.rag.factory import (
     has_ready_provider_index,
     normalize_provider_name,
 )
-
 logger = logging.getLogger(__name__)
 
 # Legacy fallback only — frozen at admin scope at import time. Production code
@@ -71,9 +71,39 @@ class KnowledgeBaseConfigService:
     def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         defaults = payload.setdefault("defaults", _default_payload()["defaults"])
         defaults["rag_provider"] = normalize_provider_name(defaults.get("rag_provider"))
+        raw_default_kb = defaults.get("default_kb")
+        if raw_default_kb is not None:
+            try:
+                defaults["default_kb"] = validate_knowledge_base_name(
+                    str(raw_default_kb)
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid default knowledge-base name %r", raw_default_kb
+                )
+                defaults["default_kb"] = None
 
         knowledge_bases = payload.setdefault("knowledge_bases", {})
+        if not isinstance(knowledge_bases, dict):
+            knowledge_bases = {}
+            payload["knowledge_bases"] = knowledge_bases
         kb_base_dir = self.config_path.parent
+        # Config is user-editable JSON.  Drop legacy/path-shaped keys before
+        # joining them to the KB root; retaining them in memory would let a
+        # later provider check or metadata sync inspect ``../../`` locations.
+        safe_items: dict[str, Any] = {}
+        for raw_name, config in knowledge_bases.items():
+            try:
+                kb_name = validate_knowledge_base_name(str(raw_name))
+            except ValueError:
+                logger.warning("Ignoring invalid knowledge-base config key %r", raw_name)
+                continue
+            if kb_name in safe_items:
+                continue
+            safe_items[kb_name] = config
+        if safe_items != knowledge_bases:
+            knowledge_bases.clear()
+            knowledge_bases.update(safe_items)
         for kb_name, config in knowledge_bases.items():
             if not isinstance(config, dict):
                 continue
@@ -122,6 +152,7 @@ class KnowledgeBaseConfigService:
         self._config = self._load_config()
 
     def _ensure_kb(self, kb_name: str) -> dict[str, Any]:
+        kb_name = validate_knowledge_base_name(kb_name)
         knowledge_bases = self._config.setdefault("knowledge_bases", {})
         if kb_name not in knowledge_bases:
             knowledge_bases[kb_name] = {
@@ -131,6 +162,7 @@ class KnowledgeBaseConfigService:
         return knowledge_bases[kb_name]
 
     def get_kb_config(self, kb_name: str) -> dict[str, Any]:
+        kb_name = validate_knowledge_base_name(kb_name)
         self._refresh()
         defaults = dict(self._config.get("defaults", {}))
         kb_config = dict(self._config.get("knowledge_bases", {}).get(kb_name, {}))
@@ -145,6 +177,7 @@ class KnowledgeBaseConfigService:
         return merged
 
     def set_kb_config(self, kb_name: str, config: dict[str, Any]) -> None:
+        kb_name = validate_knowledge_base_name(kb_name)
         self._refresh()
         entry = self._ensure_kb(kb_name)
         entry.update(config)
@@ -176,6 +209,7 @@ class KnowledgeBaseConfigService:
         self._save()
 
     def delete_kb_config(self, kb_name: str) -> None:
+        kb_name = validate_knowledge_base_name(kb_name)
         self._refresh()
         knowledge_bases = self._config.get("knowledge_bases", {})
         if kb_name in knowledge_bases:
@@ -193,6 +227,8 @@ class KnowledgeBaseConfigService:
         self._save()
 
     def set_default_kb(self, kb_name: str | None) -> None:
+        if kb_name is not None:
+            kb_name = validate_knowledge_base_name(kb_name)
         self._refresh()
         self._config.setdefault("defaults", _default_payload()["defaults"])["default_kb"] = kb_name
         self._save()
@@ -202,6 +238,7 @@ class KnowledgeBaseConfigService:
         return self._config.get("defaults", {}).get("default_kb")
 
     def sync_from_metadata(self, kb_name: str, kb_base_dir: Path) -> None:
+        kb_name = validate_knowledge_base_name(kb_name)
         metadata_file = kb_base_dir / kb_name / "metadata.json"
         if not metadata_file.exists():
             return

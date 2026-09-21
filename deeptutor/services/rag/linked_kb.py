@@ -94,20 +94,59 @@ def assert_path_allowed(folder_path: str) -> Path:
 
     Returns the resolved absolute path. Raises ``ValueError`` if the folder is
     missing/not a directory, or escapes the configured allowlist (symlinks are
-    resolved first so they can't tunnel out). With no allowlist set, any
-    existing directory is permitted — the self-hosted default.
+    resolved first so they can't tunnel out). In an authenticated ordinary-user
+    request the path is additionally confined to that user's workspace root;
+    only the administrator/single-user compatibility scope may opt into an
+    external path through the deployment allowlist. This keeps a client from
+    turning a linked KB or subagent cwd into a cross-user filesystem bridge.
     """
     folder = Path(folder_path).expanduser()
+    lexical = folder if folder.is_absolute() else (Path.cwd() / folder)
+    try:
+        from deeptutor.multi_user.context import get_current_user
+
+        current_user = get_current_user()
+    except Exception as exc:
+        # A request without an installed identity must not use the admin path
+        # fallback merely because this helper is called by a linked-resource
+        # endpoint.
+        raise ValueError("An authenticated user scope is required") from exc
+
+    if not current_user.is_admin:
+        from deeptutor.multi_user.paths import get_current_path_service
+
+        user_root = get_current_path_service().workspace_root.resolve()
+        if any(parent.is_symlink() for parent in _parents_including_self(lexical)):
+            raise ValueError("Linked paths cannot contain symbolic links.")
+    else:
+        user_root = None
+
     if not folder.exists():
         raise ValueError(f"Folder does not exist: {folder}")
     if not folder.is_dir():
         raise ValueError(f"Not a directory: {folder}")
     resolved = folder.resolve()
 
+    if user_root is not None:
+        if resolved != user_root and user_root not in resolved.parents:
+            raise ValueError("Ordinary users may link only folders in their own workspace.")
+
     roots = allowed_link_roots()
     if roots and not any(_is_within(resolved, root) for root in roots):
         raise ValueError("This folder is outside the locations allowed for linking.")
     return resolved
+
+
+def _parents_including_self(path: Path):
+    """Yield lexical path components without resolving symlinks."""
+
+    current = path
+    while True:
+        yield current
+        parent = current.parent
+        if parent == current:
+            return
+        current = parent
 
 
 def _is_within(path: Path, root: Path) -> bool:

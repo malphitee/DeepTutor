@@ -36,6 +36,24 @@ def test_delete_knowledge_base_removes_config_and_directory(tmp_path: Path) -> N
     assert "demo" not in _read_config(manager.config_file).get("knowledge_bases", {})
 
 
+def test_delete_knowledge_base_rejects_symlink_directory(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_text("private", encoding="utf-8")
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path))
+    (manager.base_dir / "linked-tree").symlink_to(outside, target_is_directory=True)
+    manager.config.setdefault("knowledge_bases", {})["linked-tree"] = {
+        "path": "linked-tree"
+    }
+    manager._save_config()
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        manager.delete_knowledge_base("linked-tree", confirm=True)
+
+    assert marker.read_text(encoding="utf-8") == "private"
+
+
 def test_delete_knowledge_base_clears_config_when_rmtree_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

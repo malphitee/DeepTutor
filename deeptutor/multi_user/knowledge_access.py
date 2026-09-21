@@ -277,6 +277,15 @@ def resolve_kb_manifest(
     entry = manager.get_kb_entry(resource.name)
     if entry is None:
         return None
+    if resource.source == "user":
+        external = entry.get("external_path") or entry.get("vault_path")
+        if external:
+            try:
+                from deeptutor.services.rag.linked_kb import assert_path_allowed
+
+                assert_path_allowed(str(external))
+            except ValueError:
+                return None
     return build_manifest(
         name=resource.name,
         kb_dir=resource.base_dir / resource.name,
@@ -313,6 +322,13 @@ def resolve_kb_document_path(kb_ref: str | None, rel_path: str) -> Path | None:
     root = document_root(resource.base_dir / resource.name, entry)
     if root is None or not root.is_dir():
         return None
+    if resource.source == "user" and (entry.get("external_path") or entry.get("vault_path")):
+        try:
+            from deeptutor.services.rag.linked_kb import assert_path_allowed
+
+            root = assert_path_allowed(str(root))
+        except ValueError:
+            return None
     try:
         resolved_root = root.resolve()
         candidate = (root / str(rel_path).strip()).resolve()

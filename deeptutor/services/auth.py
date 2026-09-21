@@ -16,7 +16,7 @@ Multi-user setup (recommended):
     Navigate to /register in the browser. The first user to register is granted
     admin privileges and can manage other users from /admin/users.
 
-    Users are stored in data/user/auth_users.json:
+    Users are stored in data/system/auth/users.json:
         {
             "alice": {"hash": "$2b$12$...", "role": "admin", "created_at": "2026-..."},
             "bob":   {"hash": "$2b$12$...", "role": "user",  "created_at": "2026-..."}
@@ -75,6 +75,24 @@ class TokenPayload:
     user_id: str = ""
     device_credential_id: str = ""
     device_session_nonce: str = ""
+    token_version: int = 0
+
+
+def assert_supported_backend() -> None:
+    """Reject the old PocketBase control plane in multi-user deployments.
+
+    PocketBase stores sessions outside the per-user SQLite trees and has no
+    equivalent for DeepTutor's grants, path scopes, or immediate revocation.
+    It remains available only for the historical auth-disabled/single-user
+    compatibility mode; enabling local authentication with it is an invalid
+    deployment rather than a partially isolated one.
+    """
+
+    if AUTH_ENABLED and POCKETBASE_ENABLED:
+        raise RuntimeError(
+            "PocketBase cannot be combined with built-in multi-user authentication; "
+            "unset integrations.pocketbase_url and use data/system plus data/users."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +231,17 @@ def set_role(username: str, role: str) -> bool:
     return True
 
 
+def set_disabled(username: str, disabled: bool) -> bool:
+    """Enable/disable a local account and revoke all previously issued JWTs."""
+
+    from deeptutor.multi_user.identity import set_disabled as _set_disabled
+
+    if not _set_disabled(username, disabled):
+        return False
+    logger.info("User '%s' disabled=%s", username, disabled)
+    return True
+
+
 def set_avatar(username: str, avatar: str) -> bool:
     """
     Update the avatar marker for an existing user. Returns True on success.
@@ -265,14 +294,24 @@ def create_token(
     """Create a signed JWT for the given username and role."""
     from jose import jwt
 
-    if not user_id:
-        record = _load_users().get(username) or {}
-        user_id = str(record.get("id") or "")
+    record = _load_users().get(username) or {}
+    if record:
+        # Never mint a token with a caller-supplied role for a known account.
+        # The identity store is authoritative; the role claim is only a
+        # cache for old clients and is revalidated by decode_token below.
+        role = str(record.get("role") or "user")
+        user_id = str(record.get("id") or user_id or "")
+        token_version = max(0, int(record.get("token_version", 0) or 0))
+    else:
+        token_version = 0
+        if not user_id:
+            user_id = ""
 
     payload = {
         "sub": username,
         "role": role,
         "uid": user_id,
+        "ver": token_version,
         "dcid": device_credential_id,
         "dcs": device_session_nonce,
         "exp": datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS),
@@ -295,6 +334,7 @@ def decode_token(token: str) -> TokenPayload | None:
         return None
 
     if POCKETBASE_ENABLED:
+        assert_supported_backend()
         from deeptutor.services.pocketbase_client import validate_pb_token
 
         payload = validate_pb_token(token)
@@ -317,10 +357,38 @@ def decode_token(token: str) -> TokenPayload | None:
         username = payload.get("sub")
         if not username:
             return None
-        user_id = str(payload.get("uid") or "")
-        if not user_id:
-            record = _load_users().get(str(username)) or {}
+        claimed_user_id = str(payload.get("uid") or "")
+        record = _load_users().get(str(username)) or {}
+        if not record:
+            # A few integrations mint a signed non-admin token before their
+            # compatibility account is materialized locally. Keep that narrow
+            # compatibility path, while a durable delete tombstone still
+            # invalidates an old token.
+            from deeptutor.multi_user.identity import deleted_identity_revoked
+
+            if deleted_identity_revoked(str(username), claimed_user_id):
+                return None
+            role = str(payload.get("role") or "user")
+            if role != "user":
+                return None
+            user_id = claimed_user_id or str(username)
+            current_version = 0
+        else:
+            if bool(record.get("disabled", False)):
+                return None
             user_id = str(record.get("id") or "")
+            if claimed_user_id and claimed_user_id != user_id:
+                return None
+            try:
+                claimed_version = int(payload.get("ver", 0) or 0)
+                current_version = int(record.get("token_version", 0) or 0)
+            except (TypeError, ValueError):
+                return None
+            if claimed_version != current_version:
+                return None
+            role = str(record.get("role") or "user")
+            if role not in {"admin", "user"}:
+                return None
         device_credential_id = str(payload.get("dcid") or "")
         device_session_nonce = str(payload.get("dcs") or "")
         if device_credential_id:
@@ -334,10 +402,11 @@ def decode_token(token: str) -> TokenPayload | None:
                 return None
         return TokenPayload(
             username=username,
-            role=payload.get("role", "user"),
+            role=role,
             user_id=user_id,
             device_credential_id=device_credential_id,
             device_session_nonce=device_session_nonce,
+            token_version=current_version,
         )
     except JWTError:
         return None
@@ -359,6 +428,7 @@ def authenticate_pb(username: str, password: str) -> tuple[TokenPayload, str] | 
     PocketBase requires an email address; plain usernames are mapped to
     <username>@deeptutor.local to match the email used at registration.
     """
+    assert_supported_backend()
     try:
         from deeptutor.services.pocketbase_client import get_pb_client
 
@@ -387,6 +457,7 @@ def register_pb(username: str, email: str, password: str) -> dict | None:
 
     Returns the created user record dict or None on failure.
     """
+    assert_supported_backend()
     try:
         from deeptutor.services.pocketbase_client import get_pb_client
 
@@ -420,6 +491,8 @@ def authenticate(username: str, password: str) -> TokenPayload | None:
     if not AUTH_ENABLED:
         return TokenPayload(username=username or "local", role="admin", user_id="local-admin")
 
+    assert_supported_backend()
+
     users = _load_users()
     if not users:
         logger.warning(
@@ -432,13 +505,21 @@ def authenticate(username: str, password: str) -> TokenPayload | None:
     if not record:
         return None
 
+    if isinstance(record, dict) and bool(record.get("disabled", False)):
+        return None
+
     hashed = record.get("hash", "") if isinstance(record, dict) else record
     if not verify_password(password, hashed):
         return None
 
     role = record.get("role", "user") if isinstance(record, dict) else "user"
     user_id = str(record.get("id") or "") if isinstance(record, dict) else ""
-    return TokenPayload(username=username, role=role, user_id=user_id)
+    return TokenPayload(
+        username=username,
+        role=role,
+        user_id=user_id,
+        token_version=max(0, int(record.get("token_version", 0) or 0)),
+    )
 
 
 def authenticate_device(pairing_code: str, pin: str) -> TokenPayload | None:
