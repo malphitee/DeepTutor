@@ -95,6 +95,39 @@ def assert_supported_backend() -> None:
         )
 
 
+def log_isolation_mode() -> None:
+    """State the deployment's isolation posture at startup.
+
+    A single-user compatibility deployment must be distinguishable from a
+    multi-user isolated one in the startup log, so an operator cannot mistake
+    a shared-workspace configuration for the isolated multi-user mode
+    (user-isolation plan, Phase 6).
+    """
+    import os
+
+    if not AUTH_ENABLED:
+        logger.info(
+            "Isolation mode: single-user compatibility — authentication is disabled; "
+            "every request runs as the local admin over the shared data/ workspace"
+        )
+        return
+    from deeptutor.multi_user.paths import USERS_ROOT
+
+    logger.info(
+        "Isolation mode: multi-user isolated — per-user workspaces under %s with "
+        "the built-in identity store",
+        USERS_ROOT,
+    )
+    shared_root = str(os.environ.get("DEEPTUTOR_WORKSPACE_ROOT", "") or "").strip()
+    if shared_root:
+        logger.warning(
+            "DEEPTUTOR_WORKSPACE_ROOT=%s is a deployment-wide shared root; with "
+            "authentication enabled it stays admin-reachable and must not be used "
+            "as a per-user workspace",
+            shared_root,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Password hashing — uses bcrypt directly (passlib is unmaintained for bcrypt 4+)
 # ---------------------------------------------------------------------------
@@ -161,6 +194,22 @@ def _load_users() -> dict[str, dict]:
 def is_first_user() -> bool:
     """Return True when no users exist yet (first registration will become admin)."""
     return len(_load_users()) == 0
+
+
+def account_by_id(user_id: str) -> tuple[str, dict] | None:
+    """Resolve ``(username, record)`` for an account id.
+
+    Unlike :func:`deeptutor.multi_user.identity.get_user_by_id`, this includes
+    the ``auth.json`` bootstrap admin, which exists only in the in-memory
+    overlay that ``decode_token`` authorizes against — callers revalidating a
+    decoded payload must see the same set of accounts.
+    """
+    if not user_id:
+        return None
+    for username, record in _load_users().items():
+        if str(record.get("id") or "") == str(user_id):
+            return username, record
+    return None
 
 
 def add_user(
@@ -304,8 +353,7 @@ def create_token(
         token_version = max(0, int(record.get("token_version", 0) or 0))
     else:
         token_version = 0
-        if not user_id:
-            user_id = ""
+        user_id = user_id or ""
 
     payload = {
         "sub": username,

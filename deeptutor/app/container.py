@@ -157,9 +157,15 @@ class ApplicationContainer:
             return
         username, record = account
         # The admin workspace is intentionally shared for compatibility and
-        # has no per-account turn boundary.  A role change may have already
-        # promoted a user before this cleanup runs, so use the pre-mutation
-        # role supplied by the caller and never scan the admin store here.
+        # has no per-account turn boundary: turn rows record only the lease
+        # owner, so an admin-store scan cannot attribute turns to one account
+        # without cancelling every admin's work.  A role change may have
+        # already promoted a user before this cleanup runs, so use the
+        # pre-mutation role supplied by the caller and never scan the admin
+        # store here.  A demoted admin's in-process turns are still cancelled
+        # immediately by the revocation fan-out that ran before this method;
+        # only turns already leased by other workers in the shared store run
+        # to completion, bounded by their turn lifetime and revoked tokens.
         role = str(previous_role or record.get("role") or "user")
         if role != "user":
             return

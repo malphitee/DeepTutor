@@ -67,3 +67,32 @@ def test_revocation_fanout_signals_live_resources(mu_isolated_root) -> None:
             unregister(handle)
 
     asyncio.run(scenario())
+
+
+def test_role_demotion_cancels_in_process_turn_tasks(mu_isolated_root) -> None:
+    """Demoting an admin must stop their already-running turns in this worker.
+
+    ``revoke_user_turns`` deliberately never scans the shared admin store
+    (turn rows cannot be attributed to one account), so the in-process
+    cancellation path — the revocation registry every turn task registers
+    into — is what actually stops a demoted admin's live execution.
+    """
+
+    import asyncio
+
+    from deeptutor.multi_user import identity
+    from deeptutor.multi_user.revocation import register, unregister
+
+    record = identity.save_user("root", identity.new_user_id(), role="admin")
+
+    async def scenario() -> None:
+        task = asyncio.create_task(asyncio.sleep(3600))
+        handle = register(str(record["id"]), task.cancel)
+        try:
+            assert identity.set_role("root", "user") is True
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(task), timeout=1)
+        finally:
+            unregister(handle)
+
+    asyncio.run(scenario())

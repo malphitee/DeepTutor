@@ -39,10 +39,11 @@ class TurnApplicationService:
         from deeptutor.services.session.scope import StoreScope, store_scope
 
         user = get_current_user()
-        scope = getattr(store, "store_scope", None)
-        if not isinstance(scope, StoreScope):
-            scope = store_scope(store)
-        if isinstance(scope, StoreScope) and scope.owner_id != user.id:
+        explicit_scope = getattr(store, "store_scope", None)
+        if not isinstance(explicit_scope, StoreScope):
+            explicit_scope = None
+        scope = explicit_scope or store_scope(store)
+        if scope.owner_id != user.id:
             # Admin-compatible stores are shared by admin identities, but a
             # normal user must never operate a store whose physical SQLite
             # path belongs to another scope.
@@ -53,6 +54,11 @@ class TurnApplicationService:
             expected = get_path_service().get_chat_history_db().resolve()
             if Path(db_path).resolve() != expected:
                 raise PermissionError("Session store is not available in this scope")
+        if db_path is None and explicit_scope is None and not user.is_admin:
+            # Fail closed: a store that declares neither an owning scope nor a
+            # physical location carries no evidence tying it to this user, so
+            # an unverified custom backend must not serve a scoped request.
+            raise PermissionError("Session store is not available in this scope")
 
     async def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         """Authorize before allocating a subscription or touching coordination."""
