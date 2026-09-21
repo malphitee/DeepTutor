@@ -42,11 +42,12 @@ role 保留）。启动隔离模式声明：`tests/multi_user/test_isolation_mod
 
 | # | 缺口 | 说明 |
 | --- | --- | --- |
-| G1 | Docker A/B 端到端冒烟（阶段 7） | 需要构建镜像 + 双账号浏览器流程，未自动化；部署侧操作手册见 `user-isolation-deployment.md` §2 |
-| G2 | 前端类型检查与架构检查 | 属阶段 7；Python 侧 `compileall`/`git diff --check` 已纳入流程 |
+| G1 | Docker A/B 端到端冒烟（阶段 7） | 2026-09-21 以源码构建镜像人工执行一轮通过（注册提升/建号/KB 可见性/交叉 404/禁用 401/runner 加固与健康检查，见 `user-isolation-deployment.md` §2）；仍未自动化，每次同步后需按文档 §2 重跑 |
+| G2 | 前端类型检查与架构检查 | `npm run typecheck` 已纳入同步后验证；Python 侧 `compileall`/`git diff --check` 已纳入流程 |
 | G3 | WS 断连级集成测试 | revocation 的 token 失效与 fan-out 有单元覆盖；"禁用后既有 WebSocket 被服务端关闭"的端到端用例依赖真实 WS 握手，未单列 |
-| G4 | 跨模块私有调用待公开化 | `manager._load_config()`、`PathService._scoped_path()`、`_terminate_revoked_user` 等 5 处（见 review 记录）；行为有测试覆盖，API 归位待定 |
-| G5 | 上游同步回归矩阵（阶段 7） | 每次 Sync fork 后需人工过一遍本表 §2 |
+| ~~G4~~ | 跨模块私有调用公开化 | **已关闭**（commit 489688e2）：`terminate_revoked_user`、`PathService.scoped_path`、`KnowledgeManager.reload_config`、`safe_memory_child` 已公开化并迁移全部调用方 |
+| G5 | 上游同步回归矩阵（阶段 7） | 2026-09-21 同步 upstream/main（33 提交）时执行过一轮：§2 全表通过；冲突解法与 ADR 恢复见 git log。每次 Sync fork 后重复 |
+| G6 | 本地沙箱测试环境差异 | `test_runner_server_executes_and_truncates_output` 依赖 PATH 上的 `python` 命令：CI/激活的 venv 可通过，直接调用 `.venv/bin/python -m pytest` 会 127。属本地运行方式问题，非代码缺陷 |
 
 ## 4. 维护约定
 
