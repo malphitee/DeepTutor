@@ -377,6 +377,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Failed to stop EventBus: {e}")
 
 
+from deeptutor.services.workspace.activity import WorkspaceActivityMiddleware
+
 app = FastAPI(
     title="DeepTutor API",
     version="1.0.0",
@@ -387,6 +389,7 @@ app = FastAPI(
     # See: https://github.com/HKUDS/DeepTutor/issues/112
     redirect_slashes=False,
 )
+app.add_middleware(WorkspaceActivityMiddleware)
 
 
 @app.middleware("http")
@@ -520,6 +523,7 @@ from deeptutor.api.routers import (
     partner_groups,
     partners,
     personas,
+    practice,
     question,
     question_notebook,
     quiz_judge,
@@ -630,6 +634,12 @@ app.include_router(
     question_notebook.router,
     prefix="/api/question-notebook",
     tags=["question-notebook"],
+    dependencies=_auth,
+)
+app.include_router(
+    practice.router,
+    prefix="/api/question-notebook/practice",
+    tags=["practice"],
     dependencies=_auth,
 )
 # Public UI-settings read (auth pages bootstrap the interface language

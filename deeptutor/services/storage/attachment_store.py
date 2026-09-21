@@ -177,7 +177,9 @@ class LocalDiskAttachmentStore:
         sid = quote(_coerce_filename(session_id), safe="")
         aid = quote(attachment_id, safe="")
         name = quote(_coerce_filename(filename), safe="")
-        return f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{name}"
+        from deeptutor.services.workspace.context import workspace_url
+
+        return workspace_url(f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{name}")
 
     @staticmethod
     def _write_sync(target: Path, data: bytes) -> None:

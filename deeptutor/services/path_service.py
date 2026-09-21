@@ -615,7 +615,8 @@ class PathService:
 def get_path_service() -> PathService:
     from deeptutor.multi_user.paths import get_current_path_service
 
-    # A broken scope is never authorization to use the deployment's files.
+    # Resolution failure is an error, never permission to read the admin's
+    # data. This also prevents an invalid workspace silently falling back.
     return get_current_path_service()
 
 
