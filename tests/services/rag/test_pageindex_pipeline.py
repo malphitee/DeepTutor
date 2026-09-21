@@ -305,7 +305,7 @@ def test_pageindex_ready_omits_embedding_identity(tmp_path, monkeypatch) -> None
 
     manager.update_kb_status("page-kb", "ready")
 
-    entry = manager._load_config()["knowledge_bases"]["page-kb"]
+    entry = manager.reload_config()["knowledge_bases"]["page-kb"]
     assert (
         not {
             "embedding_model",

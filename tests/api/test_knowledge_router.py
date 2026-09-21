@@ -88,6 +88,9 @@ class _FakeKBManager:
     def _load_config(self) -> dict:
         return self.config
 
+    def reload_config(self) -> dict:
+        return self.config
+
     def _save_config(self) -> None:
         pass
 
@@ -2791,7 +2794,7 @@ def test_delete_by_body_reaches_a_name_the_path_route_cannot(monkeypatch, tmp_pa
         removed = client.post("/api/knowledge-bases/delete", json={"name": "数学/物理"})
 
     assert removed.status_code == 200
-    assert "数学/物理" not in manager._load_config().get("knowledge_bases", {})
+    assert "数学/物理" not in manager.reload_config().get("knowledge_bases", {})
 
 
 def test_delete_reports_a_missing_knowledge_base_as_404(monkeypatch, tmp_path: Path) -> None:

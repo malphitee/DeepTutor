@@ -77,7 +77,7 @@ _COOKIE_NAME = "dt_token"
 _COOKIE_MAX_AGE = TOKEN_EXPIRE_HOURS * 3600
 
 
-async def _terminate_revoked_user(user_id: str, *, previous_role: str = "user") -> None:
+async def terminate_revoked_user(user_id: str, *, previous_role: str = "user") -> None:
     """Stop live turns in the current worker after an account mutation."""
 
     # Signal sockets and execution tasks before trying to enumerate their
@@ -1309,7 +1309,7 @@ async def remove_user(
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    await _terminate_revoked_user(user_id, previous_role=previous_role)
+    await terminate_revoked_user(user_id, previous_role=previous_role)
     if user_id and _USER_ID_RE.match(user_id):
         from deeptutor.multi_user.identity import delete_avatar_file
 
@@ -1342,7 +1342,7 @@ async def update_user_role(
     logger.info(
         f"Admin '{current.username if current else 'local'}' set '{username}' role to {body.role!r}"
     )
-    await _terminate_revoked_user(user_id, previous_role=previous_role)
+    await terminate_revoked_user(user_id, previous_role=previous_role)
     return {"ok": True, "username": username, "role": body.role}
 
 
@@ -1373,5 +1373,5 @@ async def update_user_disabled(
     logger.info(
         "Admin '%s' set '%s' disabled=%s", current.username if current else "local", username, body.disabled
     )
-    await _terminate_revoked_user(user_id, previous_role=previous_role)
+    await terminate_revoked_user(user_id, previous_role=previous_role)
     return {"ok": True, "username": username, "disabled": body.disabled}

@@ -13,7 +13,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, StrictBool, field_validator
 
-from deeptutor.api.routers.auth import _terminate_revoked_user, require_admin, require_auth
+from deeptutor.api.routers.auth import require_admin, require_auth, terminate_revoked_user
 from deeptutor.knowledge.manager import KnowledgeBaseManager
 from deeptutor.multi_user.audit import log_admin_action, log_guardian_action
 from deeptutor.multi_user.book_permission import (
@@ -687,7 +687,7 @@ async def put_guardian_restrictions(
     # already-running turn.  Tear down live work after the durable grant write
     # so a turn cannot retain a broader tool/resource view until its next
     # request (or keep a WebSocket subscription alive indefinitely).
-    await _terminate_revoked_user(learner_user_id)
+    await terminate_revoked_user(learner_user_id)
     restrictions = _guardian_restrictions(grant)
     _log_supervisor_action(
         "guardian_restrictions_set",
@@ -719,7 +719,7 @@ async def reset_learner_credentials(
     )
     if set_password(learner_username, hash_password(payload.new_password)) is None:
         raise HTTPException(status_code=404, detail="User not found")
-    await _terminate_revoked_user(learner_user_id)
+    await terminate_revoked_user(learner_user_id)
     _log_supervisor_action(
         "guardian_credential_reset",
         actor_user_id=actor_user_id,
@@ -762,7 +762,7 @@ async def put_user_grants(
     # Grant replacement is an authorization boundary, including when the new
     # grant adds access: canceling in-flight work prevents a turn from mixing
     # the old and new permission snapshots and makes revocation immediate.
-    await _terminate_revoked_user(user_id)
+    await terminate_revoked_user(user_id)
     log_admin_action(
         "grant_set",
         target_user_id=user_id,

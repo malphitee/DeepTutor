@@ -118,10 +118,10 @@ class PathService:
         return self._package_root
 
     def get_user_root(self) -> Path:
-        return self._scoped_path(self._user_data_dir, "user data root")
+        return self.scoped_path(self._user_data_dir, "user data root")
 
     def get_knowledge_bases_root(self) -> Path:
-        return self._scoped_path(self._workspace_root / "knowledge_bases", "knowledge-base root")
+        return self.scoped_path(self._workspace_root / "knowledge_bases", "knowledge-base root")
 
     def get_parse_cache_root(self) -> Path:
         """Shared, content-addressed document-parse cache.
@@ -131,7 +131,7 @@ class PathService:
         and question extraction draw from this one cache, keyed by
         ``(source_hash, parser_signature)`` — see ``deeptutor/services/parsing``.
         """
-        return self._scoped_path(self._workspace_root / "parse_cache", "parse-cache root")
+        return self.scoped_path(self._workspace_root / "parse_cache", "parse-cache root")
 
     def get_chat_history_db(self) -> Path:
         return self._safe_child(self.get_user_root(), "chat_history.db", "chat history")
@@ -141,7 +141,7 @@ class PathService:
         # Keep the same component-by-component symlink checks as every other
         # per-user path; resolving this raw path first would let a later
         # ``user`` directory symlink redirect downloads into another scope.
-        return self._scoped_path(self._user_data_dir, "public output root")
+        return self.scoped_path(self._user_data_dir, "public output root")
 
     def resolve_public_output_path(self, path: str | Path) -> Path | None:
         """Return a safe, public output file below this service's user root.
@@ -227,15 +227,15 @@ class PathService:
         return self.resolve_public_output_path(path) is not None
 
     def get_workspace_dir(self) -> Path:
-        return self._scoped_path(self._user_data_dir / "workspace", "workspace root")
+        return self.scoped_path(self._user_data_dir / "workspace", "workspace root")
 
     def get_settings_dir(self) -> Path:
-        return self._scoped_path(self._user_data_dir / "settings", "settings root")
+        return self.scoped_path(self._user_data_dir / "settings", "settings root")
 
     def get_runtime_state_dir(self) -> Path:
         """Private state for active runs, never part of a content workspace."""
 
-        return self._scoped_path(self._user_data_dir / ".runtime", "runtime state root")
+        return self.scoped_path(self._user_data_dir / ".runtime", "runtime state root")
 
     def get_settings_file(self, name: str) -> Path:
         name = self._safe_component(name, "settings file")
@@ -250,13 +250,13 @@ class PathService:
         return self._safe_child(self.get_settings_dir(), name, "runtime config")
 
     def get_workspace_feature_dir(self, feature: WorkspaceFeature) -> Path:
-        return self._scoped_path(self.get_workspace_dir() / feature, f"{feature} workspace root")
+        return self.scoped_path(self.get_workspace_dir() / feature, f"{feature} workspace root")
 
     def get_chat_workspace_root(self) -> Path:
         return self.get_workspace_feature_dir("chat")
 
     def get_chat_feature_dir(self, feature: ChatWorkspaceFeature) -> Path:
-        return self._scoped_path(
+        return self.scoped_path(
             self.get_chat_workspace_root() / feature,
             f"{feature} chat workspace root",
         )
@@ -295,7 +295,7 @@ class PathService:
             return base
         if root_name == "chat":
             return self.get_chat_feature_dir(cast(ChatWorkspaceFeature, child_name))
-        return self._scoped_path(base / child_name, f"{module} agent root")
+        return self.scoped_path(base / child_name, f"{module} agent root")
 
     def get_session_file(self, module: str) -> Path:
         return self._safe_child(self.get_agent_dir(module), "sessions.json", "session store")
@@ -314,7 +314,7 @@ class PathService:
         return self._safe_child(self.get_notebook_dir(), "notebooks_index.json", "notebook index")
 
     def get_memory_dir(self) -> Path:
-        return self._scoped_path(self.workspace_root / "memory", "memory root")
+        return self.scoped_path(self.workspace_root / "memory", "memory root")
 
     def migrate_legacy_memory_markdown(self) -> bool:
         """Move the old workspace memory files into the canonical memory root once.
@@ -390,7 +390,7 @@ class PathService:
         return self.get_chat_feature_dir("deep_research")
 
     def get_research_reports_dir(self) -> Path:
-        return self._scoped_path(self.get_research_dir() / "reports", "research reports root")
+        return self.scoped_path(self.get_research_dir() / "reports", "research reports root")
 
     def get_co_writer_dir(self) -> Path:
         return self.get_workspace_feature_dir("co-writer")
@@ -399,14 +399,14 @@ class PathService:
         return self._safe_child(self.get_co_writer_dir(), "history.json", "co-writer history")
 
     def get_co_writer_tool_calls_dir(self) -> Path:
-        return self._scoped_path(self.get_co_writer_dir() / "tool_calls", "co-writer tool calls")
+        return self.scoped_path(self.get_co_writer_dir() / "tool_calls", "co-writer tool calls")
 
     def get_co_writer_audio_dir(self) -> Path:
-        return self._scoped_path(self.get_co_writer_dir() / "audio", "co-writer audio")
+        return self.scoped_path(self.get_co_writer_dir() / "audio", "co-writer audio")
 
     def get_co_writer_docs_dir(self) -> Path:
         """Root directory holding co-writer documents (one sub-directory per doc)."""
-        return self._scoped_path(self.get_co_writer_dir() / "documents", "co-writer documents")
+        return self.scoped_path(self.get_co_writer_dir() / "documents", "co-writer documents")
 
     def get_co_writer_doc_root(self, doc_id: str) -> Path:
         """Per-document root directory."""
@@ -445,7 +445,7 @@ class PathService:
         return self._safe_child(self.get_book_root(book_id), "log.md", "book log")
 
     def get_book_pages_dir(self, book_id: str) -> Path:
-        return self._scoped_path(self.get_book_root(book_id) / "pages", "book pages")
+        return self.scoped_path(self.get_book_root(book_id) / "pages", "book pages")
 
     def get_book_page_file(self, book_id: str, page_id: str) -> Path:
         self._safe_component(page_id, "book page")
@@ -459,7 +459,7 @@ class PathService:
         )
 
     def get_book_assets_dir(self, book_id: str) -> Path:
-        return self._scoped_path(self.get_book_root(book_id) / "assets", "book assets")
+        return self.scoped_path(self.get_book_root(book_id) / "assets", "book assets")
 
     def ensure_book_root(self, book_id: str) -> Path:
         root = self.get_book_root(book_id)
@@ -472,9 +472,9 @@ class PathService:
         return self.get_chat_feature_dir("_detached_exec")
 
     def get_logs_dir(self) -> Path:
-        return self._scoped_path(self.get_user_root() / "logs", "logs root")
+        return self.scoped_path(self.get_user_root() / "logs", "logs root")
 
-    def _scoped_path(self, path: Path, label: str) -> Path:
+    def scoped_path(self, path: Path, label: str) -> Path:
         """Reject symlinked user workspace components before they are used.
 
         The historical admin workspace permits operator-managed links for
@@ -586,7 +586,7 @@ class PathService:
             "personas",
             "skills",
         ):
-            self._scoped_path(self.get_workspace_dir() / feature, f"{feature} workspace root")
+            self.scoped_path(self.get_workspace_dir() / feature, f"{feature} workspace root")
         self.ensure_settings_dir()
         self.ensure_runtime_state_dir()
         self.ensure_workspace_dir()

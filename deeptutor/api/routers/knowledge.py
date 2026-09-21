@@ -870,7 +870,7 @@ def _resolve_registered_kb_name(manager: KnowledgeBaseManager, kb_name: str | No
 
 
 def _load_kb_entry_or_404(manager: KnowledgeBaseManager, kb_name: str) -> dict:
-    manager.config = manager._load_config()
+    manager.reload_config()
     kb_entry = manager.config.get("knowledge_bases", {}).get(kb_name)
     if kb_entry is None:
         raise HTTPException(status_code=404, detail=f"Knowledge base '{kb_name}' not found")
@@ -2887,7 +2887,7 @@ def _delete_kb(kb_name: str, *, allow_legacy_config_name: bool = False) -> dict[
         resolved_name = str(kb_name or "").strip()
         if allow_legacy_config_name:
             manager = manager or current_kb_manager()
-            manager.config = manager._load_config()
+            manager.reload_config()
             if resolved_name not in manager.config.get("knowledge_bases", {}):
                 manager, resolved_name, _ = _writable_kb(kb_name)
         else:
@@ -3135,7 +3135,7 @@ async def create_knowledge_base(
             },
         )
         # Also store rag_provider in config (reload and update)
-        manager.config = manager._load_config()
+        manager.reload_config()
         if name in manager.config.get("knowledge_bases", {}):
             manager.config["knowledge_bases"][name]["rag_provider"] = rag_provider
             manager.config["knowledge_bases"][name]["needs_reindex"] = False
@@ -3379,7 +3379,7 @@ async def run_reindex_task(
             # ProgressTracker persists through its own manager instance. Refresh
             # this cached instance before clearing flags so stale processing
             # state cannot overwrite the completed status it just wrote.
-            manager.config = manager._load_config()
+            manager.reload_config()
             # Clear the legacy mismatch / needs_reindex flags now that an
             # index version matching the active config exists on disk.
             kb_entry = manager.config.get("knowledge_bases", {}).get(kb_name) or {}

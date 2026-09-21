@@ -69,7 +69,7 @@ def memory_root() -> Path:
     return root
 
 
-def _safe_memory_child(*parts: str) -> Path:
+def safe_memory_child(*parts: str) -> Path:
     """Resolve a fixed memory path without following user-created links."""
     root = memory_root()
     cursor = root
@@ -85,31 +85,31 @@ def _safe_memory_child(*parts: str) -> Path:
 
 
 def trace_dir(surface: Surface) -> Path:
-    return _safe_memory_child("trace", surface)
+    return safe_memory_child("trace", surface)
 
 
 def trace_file(surface: Surface, day: date) -> Path:
-    return _safe_memory_child("trace", surface, f"{day.isoformat()}.jsonl")
+    return safe_memory_child("trace", surface, f"{day.isoformat()}.jsonl")
 
 
 def l2_dir() -> Path:
-    return _safe_memory_child("L2")
+    return safe_memory_child("L2")
 
 
 def l2_file(surface: Surface) -> Path:
-    return _safe_memory_child("L2", f"{surface}.md")
+    return safe_memory_child("L2", f"{surface}.md")
 
 
 def l3_dir() -> Path:
-    return _safe_memory_child("L3")
+    return safe_memory_child("L3")
 
 
 def l3_file(slot: L3Slot) -> Path:
-    return _safe_memory_child("L3", f"{slot}.md")
+    return safe_memory_child("L3", f"{slot}.md")
 
 
 def backup_root() -> Path:
-    return _safe_memory_child("backup")
+    return safe_memory_child("backup")
 
 
 def ensure_dirs() -> None:

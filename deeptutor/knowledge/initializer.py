@@ -62,7 +62,7 @@ class KnowledgeBaseInitializer:
             from deeptutor.knowledge.manager import KnowledgeBaseManager
 
             manager = KnowledgeBaseManager(base_dir=str(self.base_dir))
-            manager.config = manager._load_config()
+            manager.reload_config()
             if self.kb_name in manager.config.get("knowledge_bases", {}):
                 return
 
@@ -77,7 +77,7 @@ class KnowledgeBaseInitializer:
                     "total": 0,
                 },
             )
-            manager.config = manager._load_config()
+            manager.reload_config()
             manager.config.setdefault("knowledge_bases", {}).setdefault(self.kb_name, {})[
                 "rag_provider"
             ] = self.rag_provider

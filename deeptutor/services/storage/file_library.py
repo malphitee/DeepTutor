@@ -500,12 +500,12 @@ def get_file_library_store() -> FileLibraryStore:
     user_root = path_service.get_user_root()
     key = str(user_root)
     if key not in _instances:
-        db_dir = path_service._scoped_path(
+        db_dir = path_service.scoped_path(
             user_root.joinpath(*_LIBRARY_DB_SUBDIR), "file library root"
         )
         db_dir.mkdir(parents=True, exist_ok=True)
         db_path = db_dir / "library.db"
-        root = path_service._scoped_path(
+        root = path_service.scoped_path(
             user_root.joinpath(*_LIBRARY_FILES_SUBDIR), "file library root"
         )
         _instances[key] = FileLibraryStore(db_path=db_path, root=root)

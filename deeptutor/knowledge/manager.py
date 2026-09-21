@@ -349,6 +349,16 @@ class KnowledgeBaseManager:
                 return {"knowledge_bases": {}}
         return {"knowledge_bases": {}}
 
+    def reload_config(self) -> dict:
+        """Re-read ``kb_config.json`` from disk and replace the cached config.
+
+        External writers (the web router's legacy-name delete path, restore
+        tools) use this instead of poking ``_load_config`` and assigning
+        ``self.config`` by hand, so the cache and the file cannot drift.
+        """
+        self.config = self._load_config()
+        return self.config
+
     def _save_config(self):
         """Save knowledge base configuration.
 

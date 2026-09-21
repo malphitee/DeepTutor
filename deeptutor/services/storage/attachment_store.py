@@ -282,7 +282,7 @@ def _attachment_root() -> Path:
     # Validate the lexical components before any ``resolve()`` call.  A
     # symlink such as ``workspace/chat -> ../other-user/chat`` must fail closed
     # instead of becoming the apparently-normalized attachment root.
-    return path_service._scoped_path(raw_root, "attachment root")
+    return path_service.scoped_path(raw_root, "attachment root")
 
 
 def reset_attachment_store() -> None:
