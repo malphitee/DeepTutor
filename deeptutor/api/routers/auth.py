@@ -445,14 +445,6 @@ async def ws_require_auth(ws: WebSocket) -> _CtxToken | _WsAuthFailed:
     return context_token
 
 
-async def cleanup_ws_auth(scope: dict) -> None:
-    """Unregister the live-account watcher installed by ``ws_require_auth``."""
-
-    from deeptutor.multi_user.revocation import cleanup_websocket
-
-    await cleanup_websocket(scope)
-
-
 async def require_admin(
     payload: TokenPayload | None = Depends(require_auth),
 ) -> TokenPayload:

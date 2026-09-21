@@ -37,19 +37,16 @@ def resolve_kb_dir(kb_base_dir: str | Path, kb_name: str) -> Path:
         # pipeline read another user's directory.  An assigned administrator
         # KB is already an explicit grant and intentionally keeps its admin
         # scope.
-        try:
-            from deeptutor.multi_user.context import get_current_user
-            from deeptutor.multi_user.paths import get_admin_path_service
+        from deeptutor.multi_user.context import get_current_user
+        from deeptutor.multi_user.paths import get_admin_path_service
 
-            user = get_current_user()
-            admin_base = get_admin_path_service().get_knowledge_bases_root().resolve()
-            if user.is_admin or base.resolve() == admin_base:
-                return folder
-            from deeptutor.services.rag.linked_kb import assert_path_allowed
+        user = get_current_user()
+        admin_base = get_admin_path_service().get_knowledge_bases_root().resolve()
+        if user.is_admin or base.resolve() == admin_base:
+            return folder
+        from deeptutor.services.rag.linked_kb import assert_path_allowed
 
-            return assert_path_allowed(str(folder))
-        except ValueError:
-            raise
+        return assert_path_allowed(str(folder))
     return base / kb_name
 
 

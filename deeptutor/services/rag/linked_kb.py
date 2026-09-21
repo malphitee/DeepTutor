@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 # Optional ops-set allowlist of filesystem roots a linked folder must live
 # under, as an ``os.pathsep``-separated list. Unset (the default) means no
@@ -137,7 +137,7 @@ def assert_path_allowed(folder_path: str) -> Path:
     return resolved
 
 
-def _parents_including_self(path: Path):
+def _parents_including_self(path: Path) -> Iterator[Path]:
     """Yield lexical path components without resolving symlinks."""
 
     current = path

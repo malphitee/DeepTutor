@@ -11,8 +11,8 @@ coordinator still fences remote turns.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections import defaultdict
+import contextlib
 from dataclasses import dataclass
 import threading
 from typing import Callable
@@ -20,6 +20,8 @@ from typing import Callable
 
 @dataclass(frozen=True, slots=True)
 class RevocationHandle:
+    """One registered callback plus the loop it must be signalled on."""
+
     user_id: str
     loop: asyncio.AbstractEventLoop
     callback: Callable[[], None]
@@ -30,6 +32,12 @@ _handles: dict[str, set[RevocationHandle]] = defaultdict(set)
 
 
 def register(user_id: str, callback: Callable[[], None]) -> RevocationHandle:
+    """Subscribe *callback* to the next :func:`revoke` of *user_id*.
+
+    The callback runs via ``call_soon_threadsafe`` on the registering event
+    loop, so an admin mutation handled on another thread cancels sockets and
+    turn tasks on their owning loop.
+    """
     handle = RevocationHandle(str(user_id), asyncio.get_running_loop(), callback)
     with _lock:
         _handles[handle.user_id].add(handle)
@@ -37,6 +45,7 @@ def register(user_id: str, callback: Callable[[], None]) -> RevocationHandle:
 
 
 def unregister(handle: RevocationHandle | None) -> None:
+    """Drop a handle; ``None`` (never registered / already cleaned) is a no-op."""
     if handle is None:
         return
     with _lock:
