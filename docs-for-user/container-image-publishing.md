@@ -1,6 +1,6 @@
 # 镜像自动发布：GHCR 与 CNB
 
-本 fork 使用 GitHub Actions 的 `Docker Release` 流程，一次构建同时推送到：
+本 fork 使用 GitHub Actions 的 `Docker Release` 流程，每种架构构建一次，同时推送到：
 
 - `ghcr.io/malphitee/deeptutor`
 - `docker.cnb.cool/johnnliu/deeptutor`
@@ -35,11 +35,20 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 `GITHUB_TOKEN` 和 `packages: write` 权限，无需额外的个人 GitHub 令牌。
 
 两个仓库都先登录，再开始构建。缺少 CNB 令牌时明确失败，不静默省略 CNB 发布。
-同一 Git ref 的任务串行执行，构建缓存使用 GitHub Actions。流程只在 `malphitee/DeepTutor`
+同一 Git ref 的任务串行执行，构建缓存使用 GitHub Actions，并按架构分别保存。流程只在 `malphitee/DeepTutor`
 运行发布任务，避免其他 fork 意外向这些固定地址发布。
 
 前端 standalone 包含 Sharp 原生依赖，因此前端构建也必须匹配目标架构；不能将 x64 构建机
-产生的整个 `node_modules` 直接复制进 ARM 镜像。ARM 首次构建可能因模拟执行耗时更长。
+产生的整个 `node_modules` 直接复制进 ARM 镜像。AMD64 使用 `ubuntu-24.04`，ARM64 使用
+`ubuntu-24.04-arm` 原生运行器，避免模拟运行造成前端编译耗时过长。
+
+每个架构先向两个仓库推送 digest，两个架构均成功后，汇总任务才更新上述标签。发布前检查
+两仓库的源镜像架构，发布后核对所有标签的 AMD64/ARM64 子镜像和最终 digest 一致。
+
+首次实测中，CNB 将构建附带的证明清单识别为 `UNKNOWN` 并拒绝上传。因此当前发布关闭
+内嵌 provenance/SBOM，保留普通容器镜像和多架构清单。这是针对实测结果的兼容设置；
+[CNB 官方文档](https://docs.cnb.cool/zh/artifact/supported-manifest-types.html)列出了其支持的
+证明格式，后续重新启用前应实际验证兼容性。
 
 两次仓库上传不是跨平台事务；若一个上传失败，另一个可能已经完成。判断是否发布成功应看
 工作流最终状态及两个仓库的镜像清单，不能仅凭登录成功。修复权限或网络后可以重新运行任务。
@@ -47,7 +56,7 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 
 ## 配置验证
 
-本地验证发布条件、标签规则、双仓库登录与单次多架构构建配置：
+本地验证发布条件、标签规则、原生架构构建、双仓库发布及清单校验：
 
 ```bash
 ./.venv/bin/pytest -q tests/test_release_workflow_guards.py tests/scripts/test_docker_compose.py

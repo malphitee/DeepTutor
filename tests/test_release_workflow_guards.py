@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -168,7 +169,171 @@ def test_docker_publishes_one_build_to_both_owned_registries():
         if step.get("uses", "").startswith("docker/build-push-action@")
     ]
     assert len(builders) == 1
-    assert builders[0]["push"] is True
     assert builders[0]["target"] == "production"
-    assert builders[0]["platforms"] == "linux/amd64,linux/arm64"
-    assert builders[0]["tags"] == "${{ steps.meta.outputs.tags }}"
+    assert builders[0]["platforms"] == "${{ matrix.platform }}"
+    assert "tags" not in builders[0]
+    assert builders[0]["outputs"] == (
+        'type=image,"name=${{ env.GHCR_IMAGE }},${{ env.CNB_IMAGE }}",'
+        "push-by-digest=true,name-canonical=true,push=true"
+    )
+    assert builders[0]["provenance"] is False
+    assert builders[0]["sbom"] is False
+
+
+def test_native_architecture_builds_only_publish_tags_after_both_succeed():
+    document, _ = _workflow("docker")
+    build = document["jobs"]["build-and-push"]
+    assert build["runs-on"] == "${{ matrix.runner }}"
+    assert build["strategy"]["fail-fast"] is False
+    assert build["strategy"]["matrix"]["include"] == [
+        {"arch": "amd64", "platform": "linux/amd64", "runner": "ubuntu-24.04"},
+        {"arch": "arm64", "platform": "linux/arm64", "runner": "ubuntu-24.04-arm"},
+    ]
+    assert not any("setup-qemu" in step.get("uses", "") for step in build["steps"])
+    builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
+    assert builder["cache-from"] == "type=gha,scope=deeptutor-${{ matrix.arch }}"
+    assert builder["cache-to"] == "type=gha,mode=max,scope=deeptutor-${{ matrix.arch }}"
+    upload = next(
+        step["with"]
+        for step in build["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    assert upload["name"] == "image-digests-${{ matrix.arch }}"
+    assert upload["if-no-files-found"] == "error"
+    assert upload["overwrite"] is True
+    publish = document["jobs"]["publish-manifest"]
+    assert publish["needs"] == ["validate-release-tag", "build-and-push"]
+    assert "if" not in publish  # Do not publish a partial build using always().
+    build_metadata = next(step["with"] for step in build["steps"] if step.get("id") == "meta")
+    publish_metadata = next(step["with"] for step in publish["steps"] if step.get("id") == "meta")
+    assert publish_metadata == build_metadata
+
+
+def _publication_fixture(tmp_path: Path, monkeypatch):
+    """Exercise the actual publication script with a simulated Docker registry."""
+    images = ("ghcr.io/malphitee/deeptutor", "docker.cnb.cool/johnnliu/deeptutor")
+    digests = {"amd64": "sha256:" + "a" * 64, "arm64": "sha256:" + "b" * 64}
+    directory = tmp_path / "digests"
+    for arch, digest in digests.items():
+        artifact = directory / f"image-digests-{arch}"
+        artifact.mkdir(parents=True)
+        (artifact / f"{arch}.digest").write_text(digest + "\n")
+    tags = [
+        f"{image}:{tag}"
+        for image in images
+        for tag in ("feature-user-isolation", "sha-0123456789ab")
+    ]
+    monkeypatch.setenv("GHCR_IMAGE", images[0])
+    monkeypatch.setenv("CNB_IMAGE", images[1])
+    monkeypatch.setenv("DIGEST_DIR", str(directory))
+    monkeypatch.setenv("METADATA_JSON", json.dumps({"tags": tags}))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    calls = []
+    behavior = {}
+
+    def docker(command, **kwargs):
+        calls.append(command)
+        assert command[:3] == ["docker", "buildx", "imagetools"]
+        if command[3] == "create":
+            if behavior.get("push_failure") and images[1] in command[5]:
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0)
+        assert command[3] == "inspect"
+        reference = command[4]
+        if "@" in reference:
+            arch = next(arch for arch, digest in digests.items() if reference.endswith(digest))
+            result = {"os": "linux", "architecture": behavior.get("source_arch", arch)}
+        else:
+            entries = [
+                {"platform": {"os": "linux", "architecture": arch}, "digest": digest}
+                for arch, digest in digests.items()
+            ]
+            if behavior.get("missing_platform"):
+                entries.pop()
+            if behavior.get("wrong_child"):
+                entries[0]["digest"] = "sha256:" + "e" * 64
+            suffix = (
+                "d" if behavior.get("different_digest") and reference.startswith(images[1]) else "c"
+            )
+            result = {"digest": "sha256:" + suffix * 64, "manifests": entries}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(result))
+
+    monkeypatch.setattr(subprocess, "run", docker)
+    document, _ = _workflow("docker")
+    script = next(
+        step["run"]
+        for step in document["jobs"]["publish-manifest"]["steps"]
+        if step.get("id") == "publish"
+    )
+    return script, directory, images, digests, tags, calls, behavior
+
+
+def test_manifest_publication_combines_same_digests_in_both_registries(tmp_path, monkeypatch):
+    script, _, images, digests, tags, calls, _ = _publication_fixture(tmp_path, monkeypatch)
+    exec(compile(script, "publish-manifests", "exec"), {})
+    creates = [call for call in calls if call[3] == "create"]
+    assert len(creates) == 2
+    assert all(call[3] == "inspect" for call in calls[:4])
+    for image, command in zip(images, creates, strict=True):
+        assert command[-2:] == [f"{image}@{digest}" for digest in digests.values()]
+        assert [command[i + 1] for i, value in enumerate(command) if value == "--tag"] == [
+            tag for tag in tags if tag.startswith(image + ":")
+        ]
+    assert "sha256:" + "c" * 64 in (tmp_path / "summary.md").read_text()
+
+
+@pytest.mark.parametrize("damage", ["missing", "extra", "malformed", "duplicate"])
+def test_manifest_publication_rejects_invalid_digest_artifacts(tmp_path, monkeypatch, damage):
+    script, directory, _, digests, _, calls, _ = _publication_fixture(tmp_path, monkeypatch)
+    target = directory / "image-digests-arm64/arm64.digest"
+    if damage == "missing":
+        target.unlink()
+    elif damage == "extra":
+        (directory / "unexpected.digest").write_text(digests["amd64"])
+    elif damage == "malformed":
+        target.write_text("sha256:not-a-digest")
+    else:
+        target.write_text(digests["amd64"])
+    with pytest.raises(SystemExit):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert calls == []
+
+
+@pytest.mark.parametrize("damage", ["foreign_repository", "unequal_tags", "invalid_tag"])
+def test_manifest_publication_rejects_unexpected_tags(tmp_path, monkeypatch, damage):
+    script, _, _, _, tags, calls, _ = _publication_fixture(tmp_path, monkeypatch)
+    if damage == "foreign_repository":
+        tags.append("ghcr.io/unrelated/image:latest")
+    elif damage == "unequal_tags":
+        tags.pop()
+    else:
+        tags[0] += ";unexpected"
+    monkeypatch.setenv("METADATA_JSON", json.dumps({"tags": tags}))
+    with pytest.raises(SystemExit):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert calls == []
+
+
+def test_manifest_publication_rejects_wrong_source_arch_before_tagging(tmp_path, monkeypatch):
+    script, _, _, _, _, calls, behavior = _publication_fixture(tmp_path, monkeypatch)
+    behavior["source_arch"] = "riscv64"
+    with pytest.raises(SystemExit, match="Unexpected platform"):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert not any(call[3] == "create" for call in calls)
+
+
+@pytest.mark.parametrize("damage", ["missing_platform", "wrong_child", "different_digest"])
+def test_manifest_publication_fails_if_registry_result_is_inconsistent(tmp_path, monkeypatch, damage):
+    script, _, _, _, _, _, behavior = _publication_fixture(tmp_path, monkeypatch)
+    behavior[damage] = True
+    with pytest.raises(SystemExit):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert not (tmp_path / "summary.md").exists()
+
+
+def test_manifest_publication_does_not_hide_one_registry_push_failure(tmp_path, monkeypatch):
+    script, _, _, _, _, _, behavior = _publication_fixture(tmp_path, monkeypatch)
+    behavior["push_failure"] = True
+    with pytest.raises(subprocess.CalledProcessError):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert not (tmp_path / "summary.md").exists()
