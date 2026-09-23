@@ -82,8 +82,8 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 `GITHUB_TOKEN` 和 `packages: write` 权限，无需额外的个人 GitHub 令牌。
 
 两个仓库都先登录，再开始构建。缺少 CNB 令牌时明确失败，不静默省略 CNB 发布。
-测试发布和生产发布各自串行执行，不同版本 tag 共用生产并发组。构建缓存使用 GitHub Actions，
-并按架构分别保存；缓存仍受 Git ref 访问范围限制，首次 `dev` 或新 tag 可能需要完整构建。
+测试发布和生产发布各自串行执行，不同版本 tag 共用生产并发组。构建缓存保存在 GHCR，
+按发布通道和架构分开写入，并在构建时读取两个通道的同架构缓存，详见下节。
 流程只在 `malphitee/DeepTutor`
 运行发布任务，避免其他 fork 意外向这些固定地址发布。
 
@@ -102,6 +102,40 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 两次仓库上传不是跨平台事务；若一个上传失败，另一个可能已经完成。判断是否发布成功应看
 工作流最终状态及两个仓库的镜像清单，不能仅凭登录成功。修复权限或网络后可以重新运行任务。
 仓库的公开/私有设置由平台管理，工作流不自动修改可见性。
+
+## 构建缓存
+
+仅使用 `type=gha` 时，即使 `scope=deeptutor-amd64` 相同，GitHub 的 Git ref 访问规则仍然
+生效：新版本 tag 无法读取 `dev` 或其他版本 tag 的缓存。发布流程又不在默认 `main` 分支
+push 时构建，因此无法依靠默认分支预热来解决，首次发新版本往往重新安装全部依赖。
+
+现在使用独立的 GHCR BuildKit 缓存标签，复用现有 `GITHUB_TOKEN`，不增加密钥：
+
+| 构建 | 写入缓存标签 | 读取缓存标签 |
+| --- | --- | --- |
+| `dev` / AMD64 | `buildcache-test-amd64` | `buildcache-test-amd64`、`buildcache-production-amd64` |
+| 版本 tag / AMD64 | `buildcache-production-amd64` | 同上 |
+| `dev` / ARM64 | `buildcache-test-arm64` | `buildcache-test-arm64`、`buildcache-production-arm64` |
+| 版本 tag / ARM64 | `buildcache-production-arm64` | 同上 |
+
+这些标签位于 `ghcr.io/malphitee/deeptutor`，是缓存元数据，**不能作为应用镜像部署**。
+缓存不写入 CNB，也不会移动 `dev`、`latest` 或版本镜像标签。通道和架构分开写入，避免
+并行构建覆盖另一通道或架构的缓存；`mode=max` 保存前端和 Python 中间构建阶段。
+原 GHA 缓存保留为读取回退，不再重复上传，减少缓存导出耗时和每个版本的重复存储。
+
+Dockerfile 已将依赖层放在源码之前：`npm ci` 仅受 Node 基础镜像与前端依赖清单影响，
+Python 依赖安装仅受 Python 基础镜像、构建工具和 requirements 文件影响。
+因此修改业务源码或版本号时，匹配的依赖层可以直接显示 `CACHED`，前端编译或后端源码层
+仍按实际改动重建。基础镜像、依赖或安装指令发生变化时，重新安装属于正常行为。
+
+首次采用此配置仍需预热缓存；找不到缓存时正常构建，缓存上传失败只影响后续加速，不能
+据此认定缓存已可复用。后续两个不同版本 tag 的构建应检查
+`importing cache manifest from ghcr.io/...:buildcache-...` 及 `npm ci` / `pip install`
+对应步骤的 `CACHED`，以此确认跨版本命中；没有完成实测前不承诺具体耗时改善。
+手动重跑旧版本 tag 使用的是旧工作流，不会自动获得新配置。
+
+参考：[GitHub Actions 缓存访问范围](https://docs.docker.com/build/cache/backends/gha/#scope)、
+[Registry 缓存与 mode=max](https://docs.docker.com/build/cache/backends/registry/)。
 
 ## 配置验证
 

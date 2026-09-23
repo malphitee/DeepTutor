@@ -277,8 +277,6 @@ def test_native_architecture_builds_only_publish_tags_after_both_succeed():
     ]
     assert not any("setup-qemu" in step.get("uses", "") for step in build["steps"])
     builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
-    assert builder["cache-from"] == "type=gha,scope=deeptutor-${{ matrix.arch }}"
-    assert builder["cache-to"] == "type=gha,mode=max,scope=deeptutor-${{ matrix.arch }}"
     upload = next(
         step["with"]
         for step in build["steps"]
@@ -300,6 +298,54 @@ def test_native_architecture_builds_only_publish_tags_after_both_succeed():
         "${{ needs.validate-release-tag.outputs.channel }}"
     )
     assert publisher["env"]["IMAGE_TAG"] == "${{ needs.validate-release-tag.outputs.image_tag }}"
+
+
+def test_registry_cache_is_shared_across_refs_without_overwriting_other_builds():
+    """New version tags must see dev's dependency cache despite GHA ref isolation."""
+    document, _ = _workflow("docker")
+    build = document["jobs"]["build-and-push"]
+    builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
+    image = document["env"]["GHCR_IMAGE"]
+
+    def cache_entries(value: str, arch: str, channel: str) -> list[dict[str, str]]:
+        replacements = {
+            "${{ env.GHCR_IMAGE }}": image,
+            "${{ matrix.arch }}": arch,
+            "${{ needs.validate-release-tag.outputs.channel }}": channel,
+        }
+        for expression, resolved in replacements.items():
+            value = value.replace(expression, resolved)
+        assert "${{" not in value
+        return [dict(part.split("=", 1) for part in line.split(",")) for line in value.splitlines()]
+
+    writers: dict[tuple[str, str], str] = {}
+    readers: dict[tuple[str, str], set[str]] = {}
+    for platform in build["strategy"]["matrix"]["include"]:
+        arch = platform["arch"]
+        for channel in ("test", "production"):
+            exports = cache_entries(builder["cache-to"], arch, channel)
+            assert len(exports) == 1
+            export = exports[0]
+            assert export["type"] == "registry"
+            assert export["mode"] == "max"
+            assert export["ignore-error"] == "true"
+            assert export["image-manifest"] == export["oci-mediatypes"] == "true"
+            assert export["ref"].startswith(f"{image}:buildcache-")
+            writers[(arch, channel)] = export["ref"]
+
+            imports = cache_entries(builder["cache-from"], arch, channel)
+            readers[(arch, channel)] = {
+                entry["ref"] for entry in imports if entry["type"] == "registry"
+            }
+            assert {entry["scope"] for entry in imports if entry["type"] == "gha"} == {
+                f"deeptutor-{arch}"
+            }
+
+    assert len(set(writers.values())) == len(writers) == 4
+    for (arch, channel), sources in readers.items():
+        assert sources == {writers[(arch, "test")], writers[(arch, "production")]}
+        assert writers[(arch, channel)] in sources
+    assert "ignore-error" not in builder["outputs"]
 
 
 def test_docker_validates_checked_out_application_version_before_building():
@@ -423,7 +469,9 @@ def test_manifest_publication_rejects_wrong_source_arch_before_tagging(tmp_path,
 
 
 @pytest.mark.parametrize("damage", ["missing_platform", "wrong_child", "different_digest"])
-def test_manifest_publication_fails_if_registry_result_is_inconsistent(tmp_path, monkeypatch, damage):
+def test_manifest_publication_fails_if_registry_result_is_inconsistent(
+    tmp_path, monkeypatch, damage
+):
     script, _, _, _, _, _, behavior = _publication_fixture(tmp_path, monkeypatch)
     behavior[damage] = True
     with pytest.raises(SystemExit):
