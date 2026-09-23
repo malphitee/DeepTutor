@@ -37,13 +37,21 @@ def _validator_script(publication: str) -> str:
 
 
 def _run_validator(
-    publication: str, tag: str, tmp_path: Path, *, event: str = "release"
+    publication: str,
+    tag: str,
+    tmp_path: Path,
+    *,
+    event: str | None = None,
+    ref: str | None = None,
+    deleted: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     output = tmp_path / f"{publication}-output.txt"
     return subprocess.run(
         [sys.executable, "-c", _validator_script(publication)],
         env={
-            "GITHUB_EVENT_NAME": event,
+            "GITHUB_EVENT_NAME": event or ("push" if publication == "docker" else "release"),
+            "GITHUB_REF": ref or f"refs/tags/{tag}",
+            "REF_DELETED": str(deleted).lower(),
             "RELEASE_TAG": tag,
             "GITHUB_OUTPUT": str(output),
             "PATH": os.environ["PATH"],
@@ -55,14 +63,15 @@ def _run_validator(
 
 
 @pytest.mark.parametrize("publication", RELEASE_WORKFLOWS)
-def test_non_version_release_tags_skip_publication(publication: str) -> None:
+def test_publication_events_are_guarded(publication: str) -> None:
     document, publish_job_name = _workflow(publication)
     validator = document["jobs"]["validate-release-tag"]
 
     if publication == "docker":
         assert validator["if"] == (
             "github.repository == 'malphitee/DeepTutor' && "
-            "(github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))"
+            "github.event_name == 'push' && !github.event.deleted && "
+            "(github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))"
         )
     else:
         assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
@@ -74,6 +83,7 @@ def test_non_version_release_tags_skip_publication(publication: str) -> None:
     [
         ("docker", "v1.2.3"),
         ("docker", "v1.2.3rc1"),
+        ("docker", "v1.2.3-rc.1"),
         ("docker", "v1.2.3+build.1"),
         ("pypi", "v1.2.3"),
         ("pypi", "v1.2.3rc1"),
@@ -114,7 +124,7 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     result = _run_validator("docker", "v1.2.3+build.1", tmp_path)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "docker-output.txt").read_text() == (
-        "image_tag=1.2.3-build.1\nis_stable=false\n"
+        "image_tag=1.2.3-build.1\nis_stable=false\nchannel=production\n"
     )
 
     document, _ = _workflow("docker")
@@ -123,29 +133,75 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     )
     tags = metadata["with"]["tags"]
     assert "needs.validate-release-tag.outputs.image_tag" in tags
-    assert "github.event.release.prerelease == false" in tags
     assert "needs.validate-release-tag.outputs.is_stable == 'true'" in tags
-    assert "github.event_name == 'release'" in tags
+    assert "needs.validate-release-tag.outputs.channel == 'production'" in tags
     assert metadata["with"]["flavor"] == "latest=false"
 
 
-@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
-def test_branch_builds_do_not_require_a_release_or_publish_latest(event: str, tmp_path: Path):
-    result = _run_validator("docker", "", tmp_path, event=event)
+def test_dev_push_selects_test_channel_without_latest(tmp_path: Path):
+    result = _run_validator("docker", "", tmp_path, ref="refs/heads/dev")
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "docker-output.txt").read_text() == "image_tag=\nis_stable=false\n"
+    assert (tmp_path / "docker-output.txt").read_text() == (
+        "image_tag=dev\nis_stable=false\nchannel=test\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tag", "image_tag", "stable"),
+    [
+        ("v0.0.0", "0.0.0", True),
+        ("v1.2.3", "1.2.3", True),
+        ("v1.2.3a1", "1.2.3a1", False),
+        ("v1.2.3rc1", "1.2.3rc1", False),
+        ("v1.2.3.post1", "1.2.3.post1", False),
+        ("v1.2.3.dev1", "1.2.3.dev1", False),
+        ("v1.2.3-rc.1", "1.2.3-rc.1", False),
+        ("v1.2.3-beta.2+build.3", "1.2.3-beta.2-build.3", False),
+        ("v1.2.3+build.1", "1.2.3-build.1", False),
+    ],
+)
+def test_version_push_selects_production_and_only_plain_versions_are_stable(
+    tmp_path: Path, tag: str, image_tag: str, stable: bool
+):
+    result = _run_validator("docker", tag, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "docker-output.txt").read_text() == (
+        f"image_tag={image_tag}\nis_stable={str(stable).lower()}\nchannel=production\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("event", "ref", "deleted"),
+    [
+        ("push", "refs/heads/main", False),
+        ("push", "refs/heads/feature/user-isolation", False),
+        ("push", "refs/heads/dev-copy", False),
+        ("push", "refs/tags/dev", False),
+        ("push", "refs/tags/1.2.3", False),
+        ("push", "refs/heads/dev", True),
+        ("push", "refs/tags/v1.2.3", True),
+        ("release", "refs/tags/v1.2.3", False),
+        ("workflow_dispatch", "refs/heads/dev", False),
+        ("workflow_dispatch", "refs/tags/v1.2.3", False),
+        ("pull_request", "refs/heads/dev", False),
+    ],
+)
+def test_docker_rejects_other_events_refs_and_deletions(tmp_path, event, ref, deleted):
+    result = _run_validator("docker", "", tmp_path, event=event, ref=ref, deleted=deleted)
+    assert result.returncode != 0
+    assert not (tmp_path / "docker-output.txt").exists()
 
 
 def test_docker_publishes_one_build_to_both_owned_registries():
     document, publish_job_name = _workflow("docker")
     # PyYAML follows YAML 1.1, where the Actions key `on` is parsed as True.
     triggers = document[True]
-    assert triggers["push"]["branches"] == ["main", "feature/user-isolation"]
-    assert "workflow_dispatch" in triggers
-    assert "pull_request" not in triggers
-    assert triggers["release"]["types"] == ["published"]
+    assert triggers == {"push": {"branches": ["dev"], "tags": ["v*"]}}
     assert document["permissions"]["packages"] == "write"
     assert document["concurrency"]["cancel-in-progress"] is False
+    assert document["concurrency"]["group"] == (
+        "docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}"
+    )
     assert document["env"]["GHCR_IMAGE"] == "ghcr.io/malphitee/deeptutor"
     assert document["env"]["CNB_IMAGE"] == "docker.cnb.cool/johnnliu/deeptutor"
 
@@ -161,8 +217,15 @@ def test_docker_publishes_one_build_to_both_owned_registries():
 
     metadata = next(step["with"] for step in steps if step.get("id") == "meta")
     assert metadata["images"].splitlines() == ["${{ env.GHCR_IMAGE }}", "${{ env.CNB_IMAGE }}"]
-    assert "type=ref,event=branch,enable=${{ github.event_name != 'release' }}" in metadata["tags"]
-    assert "type=sha,format=short" in metadata["tags"]
+    assert metadata["tags"].splitlines() == [
+        "type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}",
+        "type=sha,format=short,prefix=${{ "
+        "needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}",
+        "type=raw,value=latest,enable=${{ "
+        "needs.validate-release-tag.outputs.channel == 'production' && "
+        "needs.validate-release-tag.outputs.is_stable == 'true' }}",
+    ]
+    assert document["env"]["DOCKER_METADATA_SHORT_SHA_LENGTH"] == "12"
     builders = [
         step["with"]
         for step in steps
@@ -218,11 +281,7 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
         artifact = directory / f"image-digests-{arch}"
         artifact.mkdir(parents=True)
         (artifact / f"{arch}.digest").write_text(digest + "\n")
-    tags = [
-        f"{image}:{tag}"
-        for image in images
-        for tag in ("feature-user-isolation", "sha-0123456789ab")
-    ]
+    tags = [f"{image}:{tag}" for image in images for tag in ("dev", "dev-sha-0123456789ab")]
     monkeypatch.setenv("GHCR_IMAGE", images[0])
     monkeypatch.setenv("CNB_IMAGE", images[1])
     monkeypatch.setenv("DIGEST_DIR", str(directory))

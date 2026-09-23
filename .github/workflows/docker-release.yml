@@ -1,8 +1,8 @@
-name: Docker Release
+name: Docker Images
 
 # Build each architecture once and publish the same image to both registries.
-# Push/manual branch builds use branch + commit tags; only stable releases
-# update latest. This fork owns both destinations below.
+# Pushes to dev publish test images; version-tag pushes publish production images.
+# Only stable version tags update latest. This fork owns both destinations below.
 #
 # GHCR: ghcr.io/malphitee/deeptutor
 # CNB:  docker.cnb.cool/johnnliu/deeptutor
@@ -10,15 +10,13 @@ name: Docker Release
 on:
   push:
     branches:
-      - main
-      - feature/user-isolation
-  workflow_dispatch:
-  release:
-    types: [published]
+      - dev
+    tags:
+      - 'v*'
 
-# Serialize runs on a ref so an older build cannot overwrite its newer tag.
+# Serialize each publication channel, including different production tags.
 concurrency:
-  group: docker-release-${{ github.ref }}
+  group: docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}
   cancel-in-progress: false
 
 permissions:
@@ -33,35 +31,44 @@ env:
 jobs:
   validate-release-tag:
     name: Validate publication event
-    if: github.repository == 'malphitee/DeepTutor' && (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))
+    if: github.repository == 'malphitee/DeepTutor' && github.event_name == 'push' && !github.event.deleted && (github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.validate.outputs.image_tag }}
       is_stable: ${{ steps.validate.outputs.is_stable }}
+      channel: ${{ steps.validate.outputs.channel }}
     steps:
-      - name: Require an image version tag
+      - name: Validate dev or version-tag push
         id: validate
         shell: python
         run: |
           import os
           import re
 
-          if os.environ.get("GITHUB_EVENT_NAME", "release") != "release":
+          if os.environ.get("GITHUB_EVENT_NAME") != "push" or os.environ.get("REF_DELETED") == "true":
+              raise SystemExit("Images are published only for non-deletion pushes")
+          ref = os.environ["GITHUB_REF"]
+          if ref == "refs/heads/dev":
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                  output.write("image_tag=\nis_stable=false\n")
+                  output.write("image_tag=dev\nis_stable=false\nchannel=test\n")
               raise SystemExit(0)
+          if not ref.startswith("refs/tags/"):
+              raise SystemExit("Only dev or a version tag can publish images")
 
-          tag = os.environ["RELEASE_TAG"]
+          tag = ref.removeprefix("refs/tags/")
           pattern = (
               r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+              r"(?:"
               r"(?:(?:a|b|rc)(?:0|[1-9]\d*))?"
               r"(?:\.post(?:0|[1-9]\d*))?"
               r"(?:\.dev(?:0|[1-9]\d*))?"
+              r"|-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*"
+              r")"
               r"(?:\+[0-9A-Za-z]+(?:[._-][0-9A-Za-z]+)*)?$"
           )
           if not re.fullmatch(pattern, tag):
               raise SystemExit(
-                  f"Release tag {tag!r} is not an image version tag "
+                  f"Git tag {tag!r} is not an image version tag "
                   "(expected vX.Y.Z with an optional suffix)."
               )
           # '+' is valid version metadata but not valid in an OCI tag.
@@ -73,11 +80,12 @@ jobs:
                   + str(bool(re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag))).lower()
                   + "\n"
               )
+              output.write("channel=production\n")
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_DELETED: ${{ github.event.deleted }}
 
   build-and-push:
-    name: Build and Push (${{ matrix.arch }})
+    name: Build ${{ needs.validate-release-tag.outputs.channel }} (${{ matrix.arch }})
     needs: validate-release-tag
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -133,10 +141,9 @@ jobs:
             ${{ env.CNB_IMAGE }}
           flavor: latest=false
           tags: |
-            type=ref,event=branch,enable=${{ github.event_name != 'release' }}
-            type=sha,format=short
-            type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }},enable=${{ github.event_name == 'release' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && github.event.release.prerelease == false && needs.validate-release-tag.outputs.is_stable == 'true' }}
+            type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
+            type=sha,format=short,prefix=${{ needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}
+            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Build and push
         id: build
@@ -223,10 +230,9 @@ jobs:
             ${{ env.CNB_IMAGE }}
           flavor: latest=false
           tags: |
-            type=ref,event=branch,enable=${{ github.event_name != 'release' }}
-            type=sha,format=short
-            type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }},enable=${{ github.event_name == 'release' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && github.event.release.prerelease == false && needs.validate-release-tag.outputs.is_stable == 'true' }}
+            type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
+            type=sha,format=short,prefix=${{ needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}
+            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Publish and verify manifests
         id: publish
