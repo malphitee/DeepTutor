@@ -75,6 +75,18 @@ class SandboxService:
         """Run *request* for *user_id*, enforcing quota; never raises for
         command failure — only the sandbox/quota envelope is reported via
         :attr:`ExecResult.error`."""
+        try:
+            from deeptutor.multi_user.execution_access import (
+                assert_sandbox_execution_allowed,
+            )
+
+            assert_sandbox_execution_allowed()
+        except Exception:
+            # A missing identity is fail-closed for execution.  CLI/startup
+            # callers that intentionally run as the local admin still resolve
+            # through get_current_user() outside an ASGI request.
+            logger.warning("identity check failed before sandbox execution", exc_info=True)
+            return ExecResult(error=t("sandbox.disabled_for_account"))
         if not await self._ensure_healthy() or self._backend is None:
             return ExecResult(error=self._health_detail or t("sandbox.no_backend"))
         # Backstop for the per-user exec grant: pipelines hide the exec tool
@@ -86,7 +98,11 @@ class SandboxService:
             if exec_override() is False:
                 return ExecResult(error=t("sandbox.disabled_for_account"))
         except Exception:
-            logger.warning("per-user exec policy check failed; continuing", exc_info=True)
+            # A policy lookup failure must never turn into an execution grant.
+            # The pipeline normally evaluates this gate first, but the sandbox
+            # is also callable directly by integrations and background tasks.
+            logger.warning("per-user exec policy check failed; denying", exc_info=True)
+            return ExecResult(error=t("sandbox.disabled_for_account"))
         try:
             lease = await self._quota.acquire(user_id)
         except QuotaExceeded as exc:

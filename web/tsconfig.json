@@ -28,6 +28,8 @@
     "proxy.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
+    "pages/**/*.ts",
+    "pages/**/*.tsx",
     "components/**/*.ts",
     "components/**/*.tsx",
     "context/**/*.ts",

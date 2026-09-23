@@ -140,6 +140,12 @@ class ManimRenderService:
         quality: str,
         save_last_frame: bool,
     ) -> None:
+        from deeptutor.multi_user.execution_access import assert_manim_execution_allowed
+
+        # This is the final boundary before generated Python is launched.
+        # Keep it here because book generation and direct pipeline callers can
+        # bypass the HTTP turn preparer and capability classes.
+        assert_manim_execution_allowed()
         quality_flag = QUALITY_FLAG_MAP.get(quality, "-qm")
         command = [
             sys.executable,

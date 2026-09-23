@@ -16,10 +16,11 @@ import shlex
 class IsolationLevel(str, Enum):
     """How strongly a backend isolates an execution from the host.
 
-    Mirrors nanobot's WorkspaceSandboxStatus vocabulary. The policy gate
-    keys off this: shell exec is offered to ordinary users only at
-    ``SYSTEM`` (OS-enforced) isolation; ``APPLICATION`` (path checks only)
-    is admin-opt-in; ``OFF`` never runs untrusted code.
+    Mirrors nanobot's WorkspaceSandboxStatus vocabulary. ``SYSTEM`` is a
+    prerequisite for multi-user exec, but the policy additionally requires
+    private per-user work, temporary, and artifact roots. The shipped runner
+    does not yet provide that contract, so only administrator/partner scopes
+    execute. ``APPLICATION`` is admin-opt-in; ``OFF`` never runs untrusted code.
     """
 
     SYSTEM = "system"  # OS-enforced (container / bubblewrap namespaces)

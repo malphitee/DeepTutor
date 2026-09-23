@@ -74,6 +74,10 @@ async def sync_claude_models() -> tuple[list[dict[str, str]], str]:
     """
     import asyncio
 
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
+
     try:
         screen = await asyncio.to_thread(_capture_model_screen)
     except Exception:
@@ -145,6 +149,9 @@ def _capture_model_screen() -> str | None:
     on screen, or ``None`` if we couldn't get there. POSIX-only; gracefully
     returns ``None`` when ``pyte`` is unavailable or the platform has no pty.
     """
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
     if os.name != "posix":
         return None
     try:

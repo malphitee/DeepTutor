@@ -8,13 +8,20 @@ import json
 import logging
 from pathlib import Path
 import secrets
-import threading
 from typing import Any
 from uuid import uuid4
 
 from deeptutor.services.file_io import atomic_write_text
 from deeptutor.utils.secret_files import write_secret_text
 
+from .auth_store import (
+    AUTH_STORE_LOCK,
+    IdentityStoreError,
+    UserAlreadyExistsError,
+    read_json_object,
+    transaction,
+    write_private_json,
+)
 from .book_permission import (
     BookPermission,
     canonical_book_permission,
@@ -27,18 +34,21 @@ from .paths import PROJECT_ROOT, SYSTEM_ROOT, migrate_legacy_multi_user_tree
 
 logger = logging.getLogger(__name__)
 
-# Serialises writes to USERS_FILE so a concurrent burst of /register requests
-# cannot all see ``not users`` and each promote themselves to admin. Single-
-# process FastAPI deployments (the ``deeptutor start`` launcher) are fully covered;
-# multi-worker deployments still race and must rely on an external user store
-# (e.g. PocketBase), which is documented in the multi-user README.
-_USERS_WRITE_LOCK = threading.Lock()
+# All identity and invite operations share one reentrant lock and recover any
+# committed registration journal before reading or writing. One process only.
+_USERS_WRITE_LOCK = AUTH_STORE_LOCK
 
 AUTH_DIR = SYSTEM_ROOT / "auth"
 USERS_FILE = AUTH_DIR / "users.json"
 SECRET_FILE = AUTH_DIR / "auth_secret"
+REVOKED_USERS_FILE = AUTH_DIR / "revoked_users.json"
 LEGACY_USERS_FILE = PROJECT_ROOT / "data" / "user" / "auth_users.json"
 LEGACY_SECRET_FILE = PROJECT_ROOT / "data" / "user" / "auth_secret"
+
+
+def auth_store_transaction():
+    """Lock both stores and finish any pending registration before accessing them."""
+    return transaction(AUTH_DIR, USERS_FILE)
 
 
 def new_user_id() -> str:
@@ -49,6 +59,19 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _token_version(value: Any, *, missing: int = 0) -> int:
+    """Read a bounded account incarnation counter from legacy JSON."""
+
+    if not isinstance(value, dict) or "token_version" not in value:
+        return missing
+    try:
+        return max(0, int(value.get("token_version", missing) or 0))
+    except (TypeError, ValueError):
+        # A malformed counter must not make the identity store unreadable. The
+        # conservative value is still replaced on the next state mutation.
+        return missing
+
+
 def _canonical_record(
     username: str,
     value: Any,
@@ -56,29 +79,41 @@ def _canonical_record(
     default_role: Role = "user",
 ) -> dict[str, Any] | None:
     if isinstance(value, str):
+        if not value:
+            return None
         return {
             "id": new_user_id(),
             "hash": value,
             "role": default_role,
+            "token_version": 0,
             "created_at": utc_now(),
             "disabled": False,
             "avatar": "",
         }
     if not isinstance(value, dict):
         return None
-    hashed = str(value.get("hash") or value.get("password_hash") or "")
-    if not hashed:
+    hashed = value.get("hash") or value.get("password_hash") or ""
+    if not isinstance(hashed, str) or not hashed:
         return None
-    role = str(value.get("role") or default_role)
-    if role not in {"admin", "user"}:
-        role = default_role
-    preset = str(value.get("preset") or "standard")
-    if preset not in {"standard", "learner", "custom"}:
-        preset = "standard"
+    # Only absent fields receive legacy defaults. Treating an explicitly bad
+    # role as missing could promote a damaged first record to administrator
+    # during a read and silently persist the privilege change.
+    role = value.get("role", default_role)
+    if not isinstance(role, str) or role not in {"admin", "user"}:
+        raise IdentityStoreError("Invalid user role")
+    preset = value.get("preset", "standard")
+    if not isinstance(preset, str) or preset not in {"standard", "learner", "custom"}:
+        raise IdentityStoreError("Invalid user preset")
     record = {
         "id": str(value.get("id") or new_user_id()),
         "hash": hashed,
         "role": role,
+        # Incremented whenever an account's authentication state changes.  It
+        # is part of every locally signed token, so a role/disable/password
+        # update invalidates already issued tokens without a token blacklist.
+        # Legacy records have no incarnation counter; start them at one so a
+        # pre-isolation token with an implicit version of zero is rejected.
+        "token_version": _token_version(value, missing=1),
         "created_at": str(value.get("created_at") or utc_now()),
         "disabled": bool(value.get("disabled", False)),
         "avatar": str(value.get("avatar") or ""),
@@ -92,17 +127,47 @@ def _canonical_record(
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-        return loaded if isinstance(loaded, dict) else {}
-    except Exception as exc:
-        logger.warning("Failed to read %s: %s", path, exc)
-        return {}
+    return read_json_object(path)
 
 
 def _write_users(users: dict[str, dict[str, Any]]) -> None:
-    USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(USERS_FILE, json.dumps(users, indent=2, ensure_ascii=False))
+    write_private_json(USERS_FILE, users)
+
+
+def _revoke_user_runtime(user_id: str) -> None:
+    """Best-effort local fan-out after an authentication state mutation."""
+
+    if not user_id:
+        return
+    try:
+        from .revocation import revoke
+
+        revoke(user_id)
+    except Exception:
+        logger.exception("Could not revoke live resources for user %s", user_id)
+
+
+def _record_deleted_identity(username: str, user_id: str) -> None:
+    """Keep a tombstone so a token survives neither delete nor re-create."""
+
+    if not username:
+        return
+    revoked_file = AUTH_DIR / "revoked_users.json"
+    tombstones = _read_json(revoked_file)
+    tombstones[str(username)] = {"id": str(user_id or ""), "revoked_at": utc_now()}
+    revoked_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(revoked_file, json.dumps(tombstones, indent=2, ensure_ascii=False))
+
+
+def deleted_identity_revoked(username: str, user_id: str = "") -> bool:
+    """Whether a token refers to an account deleted in the past."""
+
+    with auth_store_transaction():
+        row = _read_json(AUTH_DIR / "revoked_users.json").get(str(username))
+    if not isinstance(row, dict):
+        return False
+    old_id = str(row.get("id") or "")
+    return not user_id or not old_id or str(user_id) == old_id
 
 
 def _migrate_legacy_users() -> dict[str, dict[str, Any]] | None:
@@ -115,8 +180,9 @@ def _migrate_legacy_users() -> dict[str, dict[str, Any]] | None:
         if isinstance(value, dict) and str(value.get("role") or "") in {"admin", "user"}:
             role = str(value.get("role"))  # type: ignore[assignment]
         record = _canonical_record(username, value, default_role=role)
-        if record is not None:
-            users[str(username)] = record
+        if record is None:
+            raise IdentityStoreError("Invalid legacy user record")
+        users[str(username)] = record
     if users:
         _write_users(users)
         logger.info("Migrated auth users from %s to %s", LEGACY_USERS_FILE, USERS_FILE)
@@ -154,9 +220,8 @@ def _env_bootstrap_admin() -> tuple[str, str]:
 
         username = str(getattr(auth_service, "AUTH_USERNAME", "") or "")
         password_hash = str(getattr(auth_service, "AUTH_PASSWORD_HASH", "") or "")
-    except Exception as exc:  # pragma: no cover - auth settings unavailable
-        logger.warning("Could not resolve the bootstrap admin credentials: %s", exc)
-        return "", ""
+    except Exception as exc:
+        raise IdentityStoreError("Cannot resolve bootstrap administrator credentials") from exc
     if not username or not password_hash:
         return "", ""
     return username, password_hash
@@ -168,6 +233,7 @@ def _env_admin_record(password_hash: str) -> dict[str, Any]:
         "id": "env-admin",
         "hash": password_hash,
         "role": "admin",
+        "token_version": 0,
         "created_at": "",
         "disabled": False,
         "avatar": "",
@@ -180,6 +246,11 @@ def load_users(  # nosec B107 - empty defaults mean "no env fallback supplied".
     env_password_hash: str = "",
 ) -> dict[str, dict[str, Any]]:
     """Load canonical users, migrating legacy records and env fallback in memory."""
+    with auth_store_transaction():
+        return _load_users_locked(env_username, env_password_hash)
+
+
+def _load_users_locked(env_username: str, env_password_hash: str) -> dict[str, dict[str, Any]]:
     migrate_legacy_multi_user_tree()
     users: dict[str, dict[str, Any]] | None = None
     if USERS_FILE.exists():
@@ -198,8 +269,7 @@ def load_users(  # nosec B107 - empty defaults mean "no env fallback supplied".
             role = str(value.get("role"))  # type: ignore[assignment]
         record = _canonical_record(str(username), value, default_role=role)
         if record is None:
-            changed = True
-            continue
+            raise IdentityStoreError("Invalid user record")
         canonical[str(username)] = record
         changed = changed or record != value
 
@@ -222,16 +292,63 @@ def load_users(  # nosec B107 - empty defaults mean "no env fallback supplied".
     return canonical
 
 
+def _new_user_record(
+    hashed_password: str, *, role: Role = "user", preset: AccountPreset = "standard"
+) -> dict[str, Any]:
+    if not isinstance(hashed_password, str) or not hashed_password:
+        raise ValueError("A password hash is required")
+    if role not in {"admin", "user"} or preset not in {"standard", "learner", "custom"}:
+        raise ValueError("Invalid account role or preset")
+    return {
+        "id": new_user_id(),
+        "hash": hashed_password,
+        "role": role,
+        "token_version": 0,
+        "created_at": utc_now(),
+        "disabled": False,
+        "avatar": "",
+        "preset": preset,
+        "book_permission": canonical_book_permission(None),
+        "learner_profile": normalize_profile(None),
+    }
+
+
+def is_bootstrap_available() -> bool:
+    """Return true only for a readable empty store without a configured admin."""
+    with auth_store_transaction():
+        users = load_users()
+        env_username, _ = _env_bootstrap_admin()
+        return not users and not env_username
+
+
+def create_user(
+    username: str,
+    hashed_password: str,
+    role: Role = "user",
+    preset: AccountPreset = "standard",
+) -> dict[str, Any]:
+    """Create one account, never overwriting an existing or bootstrap identity."""
+    with auth_store_transaction():
+        users = load_users()
+        env_username, _ = _env_bootstrap_admin()
+        if username in users or (env_username and username == env_username):
+            raise UserAlreadyExistsError("Username already taken")
+        effective_role: Role = role if users or env_username else "admin"
+        record = _new_user_record(hashed_password, role=effective_role, preset=preset)
+        users[username] = record
+        _write_users(users)
+        return deepcopy(record)
+
+
 def save_user(
     username: str,
     hashed_password: str,
     role: Role = "user",
     preset: AccountPreset = "standard",
 ) -> dict[str, Any]:
-    USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     # Read-modify-write must be atomic so concurrent first-time registrations
     # cannot each see an empty store and each promote themselves to admin.
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         # Called without the env arguments on purpose: ``users`` is written back
         # to disk below, and the bootstrap admin must stay an in-memory overlay.
         users = load_users()
@@ -251,6 +368,7 @@ def save_user(
             "id": str(existing.get("id") or new_user_id()),
             "hash": hashed_password,
             "role": effective_role,
+            "token_version": _token_version(existing),
             "created_at": str(existing.get("created_at") or utc_now()),
             "disabled": bool(existing.get("disabled", False)),
             "avatar": str(existing.get("avatar") or ""),
@@ -258,8 +376,15 @@ def save_user(
             "book_permission": canonical_book_permission(existing.get("book_permission")),
             "learner_profile": normalize_profile(existing.get("learner_profile")),
         }
+        credentials_changed = bool(existing) and (
+            existing.get("hash") != hashed_password or existing.get("role") != effective_role
+        )
+        if credentials_changed:
+            record["token_version"] += 1
         users[username] = record
         _write_users(users)
+    if credentials_changed:
+        _revoke_user_runtime(record["id"])
     return record
 
 
@@ -305,7 +430,7 @@ def get_learner_profile(username: str) -> dict[str, Any] | None:
 
 def set_learner_profile(username: str, profile: dict[str, Any] | None) -> dict[str, Any] | None:
     """Atomically replace one ordinary user's structured learner profile."""
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         record = users.get(username)
         if (
@@ -322,9 +447,7 @@ def set_learner_profile(username: str, profile: dict[str, Any] | None) -> dict[s
 def set_book_permission(username: str, permission: BookPermission) -> bool:
     """Atomically replace one ordinary user's shared-book permission."""
 
-    if not USERS_FILE.exists():
-        return False
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         record = users.get(username)
         if record is None:
@@ -340,10 +463,8 @@ def remove_book_permission_overrides(book_id: str) -> list[str]:
     Returns affected user ids for the deletion audit summary.
     """
 
-    if not USERS_FILE.exists():
-        return []
     affected: list[str] = []
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         changed = False
         for record in users.values():
@@ -367,16 +488,16 @@ def remove_book_permission_overrides(book_id: str) -> list[str]:
 
 
 def delete_user(username: str) -> bool:
-    if not USERS_FILE.exists():
-        return False
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         record = users.get(username)
         if record is None:
             return False
         user_id = str(record.get("id") or "")
         users.pop(username, None)
+        _record_deleted_identity(username, user_id)
         _write_users(users)
+    _revoke_user_runtime(user_id)
     try:
         from .guardians import revoke_relationships_for_user
 
@@ -390,23 +511,22 @@ def delete_user(username: str) -> bool:
 
 def set_password(username: str, hashed_password: str) -> dict[str, Any] | None:
     """Replace one account's password hash without changing its identity fields."""
-    if not USERS_FILE.exists():
-        return None
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         record = users.get(username)
         if record is None:
             return None
         record["hash"] = hashed_password
+        record["token_version"] = _token_version(record) + 1
         _write_users(users)
-        return deepcopy(record)
+        updated = deepcopy(record)
+    _revoke_user_runtime(str(updated.get("id") or ""))
+    return updated
 
 
 def set_avatar(username: str, avatar: str) -> bool:
     """Update the avatar marker for an existing user. Returns True on success."""
-    if not USERS_FILE.exists():
-        return False
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         if username not in users:
             return False
@@ -463,13 +583,35 @@ def delete_avatar_file(user_id: str) -> None:
 def set_role(username: str, role: Role) -> bool:
     if role not in {"admin", "user"}:
         raise ValueError("role must be 'admin' or 'user'")
-    if not USERS_FILE.exists():
-        return False
-    users = load_users()
-    if username not in users:
-        return False
-    users[username]["role"] = role
-    _write_users(users)
+    with auth_store_transaction():
+        users = load_users()
+        if username not in users:
+            return False
+        users[username]["role"] = role
+        users[username]["token_version"] = _token_version(users[username]) + 1
+        user_id = str(users[username].get("id") or "")
+        _write_users(users)
+    _revoke_user_runtime(user_id)
+    return True
+
+
+def set_disabled(username: str, disabled: bool) -> bool:
+    """Enable or disable an account and revoke its previously issued tokens."""
+
+    with auth_store_transaction():
+        users = load_users()
+        record = users.get(username)
+        if record is None:
+            return False
+        disabled = bool(disabled)
+        if bool(record.get("disabled", False)) != disabled:
+            record["disabled"] = disabled
+            record["token_version"] = _token_version(record) + 1
+            user_id = str(record.get("id") or "")
+            _write_users(users)
+        else:
+            user_id = ""
+    _revoke_user_runtime(user_id)
     return True
 
 
@@ -477,9 +619,7 @@ def set_preset(username: str, preset: AccountPreset) -> bool:
     """Update an account's configuration preset without changing its role."""
     if preset not in {"standard", "learner", "custom"}:
         raise ValueError("preset must be 'standard', 'learner', or 'custom'")
-    if not USERS_FILE.exists():
-        return False
-    with _USERS_WRITE_LOCK:
+    with auth_store_transaction():
         users = load_users()
         if username not in users:
             return False

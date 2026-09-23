@@ -1,5 +1,9 @@
 "use client";
 
+import { knowledgeBaseRef } from "@/lib/knowledge-helpers";
+import { resourceUsage } from "@/lib/workspaces-api";
+import type { EmbeddingModelSelection } from "@/features/knowledge/model/types";
+
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -31,16 +35,26 @@ const KnowledgeBaseDetail = dynamic(() => import("./KnowledgeBaseDetail"), {
 });
 const EngineDetail = dynamic(
   () => import("@/features/knowledge/components/engines/EngineDetail"),
-  { loading: panelLoading },
+  {
+    loading: panelLoading,
+  },
 );
 const CreateKbModal = dynamic(() => import("./CreateKbModal"));
 
 export default function KnowledgePage() {
-  const { t } = useTranslation();
-  const router = useRouter();
   const routeParams = useParams<{ kbName?: string }>();
   const searchParams = useSearchParams();
-  const initialKb = decodeResourceSegment(routeParams.kbName);
+  if (!routeParams || !searchParams) return panelLoading();
+  return <KnowledgePageContent kbName={routeParams.kbName} searchParams={searchParams} />;
+}
+
+function KnowledgePageContent({ kbName, searchParams }: {
+  kbName?: string;
+  searchParams: NonNullable<ReturnType<typeof useSearchParams>>;
+}) {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const initialKb = decodeResourceSegment(kbName);
   const initialEngine = searchParams.get("engine");
   const initialHomeSection: KnowledgeHomeSection =
     initialEngine || searchParams.get("section") === "engines"
@@ -143,15 +157,17 @@ export default function KnowledgePage() {
     // request is still in flight. Once loading finishes, the normal existence
     // check below may repair an actually stale name to the default KB.
     if (loading && explicitSelection) return explicitSelection;
-    if (explicitSelection && kbs.some((kb) => kb.name === explicitSelection)) {
-      return explicitSelection;
-    }
+    const exact = kbs.find(kb => knowledgeBaseRef(kb) === explicitSelection);
+    if (exact) return knowledgeBaseRef(exact);
+    const legacy = kbs.filter(kb => kb.name === explicitSelection);
+    if (legacy.length === 1) return knowledgeBaseRef(legacy[0]);
+    if (explicitSelection) return explicitSelection;
     if (!kbs.length) return null;
-    return kbs.find((kb) => kb.is_default)?.name ?? kbs[0].name;
+    return knowledgeBaseRef(kbs.find(kb => kb.is_default) ?? kbs[0]);
   }, [explicitSelection, kbs, loading]);
 
   const selectedKb = useMemo(
-    () => kbs.find((kb) => kb.name === selectedKbName) ?? null,
+    () => kbs.find((kb) => knowledgeBaseRef(kb) === selectedKbName) ?? null,
     [kbs, selectedKbName],
   );
 
@@ -199,7 +215,7 @@ export default function KnowledgePage() {
     }) => {
       try {
         await createKb(params);
-        openKb(params.name);
+        openKb(`account:kb:${params.name}`);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         throw err;
@@ -221,10 +237,10 @@ export default function KnowledgePage() {
 
   const handleDelete = useCallback(
     async (name: string) => {
-      if (!window.confirm(t('Delete knowledge base "{{name}}"?', { name }))) {
-        return;
-      }
       try {
+        const workspaces = await resourceUsage("knowledge_bases", name);
+        const impact = workspaces.length ? "\n\n" + t("Used by workspaces: {{names}}", { names: workspaces.join(", ") }) : "";
+        if (!window.confirm(t('Delete knowledge base "{{name}}"?', { name }) + impact)) return;
         await deleteKb(name);
         if (explicitSelection === name) {
           setExplicitSelection(null);
@@ -250,9 +266,13 @@ export default function KnowledgePage() {
   );
 
   const handleReindex = useCallback(
-    async (kbName: string, indexingLLM?: IndexingLLMSelection) => {
+    async (
+      kbName: string,
+      indexingLLM?: IndexingLLMSelection,
+      embeddingModel?: EmbeddingModelSelection,
+    ) => {
       try {
-        await reindex(kbName, indexingLLM);
+        await reindex(kbName, indexingLLM, embeddingModel);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         throw err;
@@ -366,8 +386,8 @@ export default function KnowledgePage() {
             <KnowledgeBaseDetail
               kb={selectedKb}
               uploadPolicy={uploadPolicy}
-              task={selectedKb ? tasksByKb[selectedKb.name] : undefined}
-              history={selectedKb ? (historyByKb[selectedKb.name] ?? []) : []}
+              task={selectedKb ? tasksByKb[knowledgeBaseRef(selectedKb)] : undefined}
+              history={selectedKb ? (historyByKb[knowledgeBaseRef(selectedKb)] ?? []) : []}
               onCreate={openCreate}
               onUpload={handleUpload}
               onReindex={handleReindex}

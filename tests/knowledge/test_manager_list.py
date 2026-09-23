@@ -56,6 +56,20 @@ def test_list_keeps_entries_when_directory_present(tmp_path: Path) -> None:
     assert "kept" in _read_config(manager.config_file).get("knowledge_bases", {})
 
 
+def test_list_hides_configured_symlink_directory(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    (outside / "raw").mkdir(parents=True)
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path))
+    (manager.base_dir / "linked-tree").symlink_to(outside, target_is_directory=True)
+    manager.config.setdefault("knowledge_bases", {})["linked-tree"] = {
+        "path": "linked-tree",
+        "status": "ready",
+    }
+    manager._save_config()
+
+    assert manager.list_knowledge_bases() == []
+
+
 def test_get_default_reuses_available_names(monkeypatch, tmp_path: Path) -> None:
     manager = KnowledgeBaseManager(base_dir=str(tmp_path))
 

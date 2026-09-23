@@ -94,6 +94,6 @@ export const config = {
   // optimizer's loopback fetch for the source image (e.g. /logo.png) is let
   // through the auth gate by isAuthExempt.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/knowledge-bases(?:$|/[^/]+/upload(?:/|$))).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/auth/register(?:/|$)|api/knowledge-bases(?:$|/[^/]+/upload(?:/|$))).*)",
   ],
 };

@@ -63,35 +63,53 @@ L3_SLOTS: tuple[L3Slot, ...] = get_args(L3Slot)
 def memory_root() -> Path:
     override = _memory_path_service.get()
     service = override if override is not None else get_path_service()
-    return service.get_memory_dir()
+    root = service.get_memory_dir()
+    if root.exists() and root.is_symlink():
+        raise PermissionError("Memory root cannot be a symbolic link")
+    return root
+
+
+def safe_memory_child(*parts: str) -> Path:
+    """Resolve a fixed memory path without following user-created links."""
+    root = memory_root()
+    cursor = root
+    for part in parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise PermissionError("Memory paths cannot contain symbolic links")
+    try:
+        cursor.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise PermissionError("Memory path leaves the user's memory root") from exc
+    return cursor
 
 
 def trace_dir(surface: Surface) -> Path:
-    return memory_root() / "trace" / surface
+    return safe_memory_child("trace", surface)
 
 
 def trace_file(surface: Surface, day: date) -> Path:
-    return trace_dir(surface) / f"{day.isoformat()}.jsonl"
+    return safe_memory_child("trace", surface, f"{day.isoformat()}.jsonl")
 
 
 def l2_dir() -> Path:
-    return memory_root() / "L2"
+    return safe_memory_child("L2")
 
 
 def l2_file(surface: Surface) -> Path:
-    return l2_dir() / f"{surface}.md"
+    return safe_memory_child("L2", f"{surface}.md")
 
 
 def l3_dir() -> Path:
-    return memory_root() / "L3"
+    return safe_memory_child("L3")
 
 
 def l3_file(slot: L3Slot) -> Path:
-    return l3_dir() / f"{slot}.md"
+    return safe_memory_child("L3", f"{slot}.md")
 
 
 def backup_root() -> Path:
-    return memory_root() / "backup"
+    return safe_memory_child("backup")
 
 
 def ensure_dirs() -> None:

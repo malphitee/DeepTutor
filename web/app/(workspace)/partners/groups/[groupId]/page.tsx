@@ -34,7 +34,7 @@ export default function PartnerGroupPage() {
   const { t } = useTranslation();
   const params = useParams<{ groupId: string }>();
   const router = useRouter();
-  const groupId = decodeURIComponent(params.groupId);
+  const groupId = decodeURIComponent(params?.groupId ?? "");
   const modeLabel = useDiscussionModeLabel();
 
   const [group, setGroup] = useState<PartnerGroup | null>(null);
@@ -44,6 +44,7 @@ export default function PartnerGroupPage() {
   const [sessionKey, setSessionKey] = useState("");
 
   const load = useCallback(async () => {
+    if (!groupId) return;
     setLoading(true);
     try {
       const data = await getPartnerGroup(groupId);

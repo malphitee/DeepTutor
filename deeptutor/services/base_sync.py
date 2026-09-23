@@ -40,6 +40,13 @@ def default_base_dir() -> str:
 
         return str(get_path_service().project_root / "data" / "knowledge_bases")
     except Exception:
+        # A request-scoped path failure must not turn into the legacy shared
+        # base directory.  The fallback is reserved for startup/background
+        # callers that run outside an authenticated request.
+        from deeptutor.multi_user.context import request_scope_active
+
+        if request_scope_active():
+            raise
         from deeptutor.knowledge.add_documents import DEFAULT_BASE_DIR
 
         return DEFAULT_BASE_DIR

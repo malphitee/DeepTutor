@@ -192,6 +192,14 @@ class CliAppTool(BaseTool):
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        # Check before inspecting a caller-supplied work directory.  The normal
+        # pipeline injects this path, but the tool remains safe when invoked
+        # directly by an integration or a malformed deferred-tool request.
+        from deeptutor.multi_user.execution_access import (
+            assert_sandbox_execution_allowed,
+        )
+
+        assert_sandbox_execution_allowed()
         event_sink = kwargs.pop("event_sink", None)
         raw_args = kwargs.get("args")
         if isinstance(raw_args, str):

@@ -18,8 +18,9 @@ from fastapi import (
     WebSocket,
     status,
 )
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from deeptutor.services.config import load_auth_settings
 
@@ -31,23 +32,43 @@ _SECURE = bool(load_auth_settings()["cookie_secure"])
 _SAMESITE = "none" if _SECURE else "lax"
 
 from deeptutor.multi_user.audit import log_admin_action, log_usage
-from deeptutor.multi_user.context import set_current_user, user_from_token_payload
+from deeptutor.multi_user.context import (
+    reset_current_user,
+    set_current_user,
+    user_from_token_payload,
+)
 from deeptutor.multi_user.device_credentials import (
     heartbeat_device_credential,
     issue_device_credential,
     list_device_credentials,
     revoke_device_credential,
 )
-from deeptutor.multi_user.identity import get_user_by_id
+from deeptutor.multi_user.identity import (
+    IdentityStoreError,
+    UserAlreadyExistsError,
+    auth_store_transaction,
+    create_user,
+    get_user_by_id,
+    is_bootstrap_available,
+)
+from deeptutor.multi_user.invites import (
+    InvalidInviteError,
+    create_invites,
+    list_invites,
+    register_user,
+    revoke_invite,
+    validate_registration_invite,
+)
 from deeptutor.multi_user.learning_access import learning_policy_for_user
 from deeptutor.multi_user.models import AccountPreset
 from deeptutor.multi_user.paths import local_admin_user
+from deeptutor.multi_user.registration_limits import registration_limiter, registration_peer
 from deeptutor.services.auth import (
     AUTH_ENABLED,
     POCKETBASE_ENABLED,
     TOKEN_EXPIRE_HOURS,
     TokenPayload,
-    add_user,
+    account_by_id,
     authenticate,
     authenticate_device,
     authenticate_pb,
@@ -55,10 +76,11 @@ from deeptutor.services.auth import (
     decode_token,
     delete_user,
     get_user_info,
-    is_first_user,
+    hash_password,
     list_users,
     register_pb,
     set_avatar,
+    set_disabled,
     set_learner_profile,
     set_role,
 )
@@ -74,6 +96,31 @@ router = APIRouter()
 
 _COOKIE_NAME = "dt_token"
 _COOKIE_MAX_AGE = TOKEN_EXPIRE_HOURS * 3600
+
+
+async def terminate_revoked_user(user_id: str, *, previous_role: str = "user") -> None:
+    """Stop live turns in the current worker after an account mutation."""
+
+    # Signal sockets and execution tasks before trying to enumerate their
+    # stores.  The latter can fail during shutdown or after a deleted account,
+    # while this process-local fan-out is cheap and independent of the store.
+    try:
+        from deeptutor.multi_user.revocation import revoke
+
+        revoke(user_id)
+    except Exception:
+        logger.exception("Failed to signal live resources for revoked user %s", user_id)
+    try:
+        from deeptutor.app.container import get_application_container
+
+        container = get_application_container()
+        if getattr(container, "_started", False):
+            await container.revoke_user_turns(user_id, previous_role=previous_role)
+    except Exception:
+        # Identity/token revocation is already durable.  A worker that cannot
+        # enumerate its runtime must still reject the next request and the
+        # revocation registry still closes local sockets/tasks.
+        logger.exception("Failed to terminate live turns for revoked user %s", user_id)
 
 
 def _cookie_attrs() -> dict:
@@ -125,8 +172,9 @@ class DeviceCredentialCreateRequest(BaseModel):
 class RegisterRequest(BaseModel):
     """Payload for the POST /register endpoint."""
 
-    username: str
-    password: str
+    username: str = Field(max_length=254)
+    password: str = Field(max_length=72)
+    invite_code: str | None = Field(default=None, max_length=64)
 
     @field_validator("username")
     @classmethod
@@ -149,7 +197,22 @@ class RegisterRequest(BaseModel):
     def password_valid(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
         return v
+
+
+class InviteCreateRequest(BaseModel):
+    batch_count: int = Field(default=1, ge=1, le=100, strict=True)
+    max_uses: int = Field(default=1, ge=1, le=1000, strict=True)
+    expires_in_days: int | None = Field(default=7, ge=1, le=365, strict=True)
+    note: str = Field(default="", max_length=200)
+
+
+class RegistrationStatusResponse(BaseModel):
+    available: bool
+    is_first_user: bool
+    invite_required: bool
 
 
 class SetRoleRequest(BaseModel):
@@ -163,6 +226,12 @@ class SetRoleRequest(BaseModel):
         if v not in ("admin", "user"):
             raise ValueError("Role must be 'admin' or 'user'")
         return v
+
+
+class SetDisabledRequest(BaseModel):
+    """Payload for enabling or disabling a local account."""
+
+    disabled: bool
 
 
 class AdminCreateUserRequest(RegisterRequest):
@@ -290,6 +359,7 @@ def _install_current_user(payload: TokenPayload | None) -> _CtxToken:
 async def require_auth(
     authorization: str | None = Header(default=None, alias="Authorization"),
     dt_token: str | None = Cookie(default=None, alias=_COOKIE_NAME),
+    request: Request = None,
 ) -> TokenPayload | None:
     """
     FastAPI dependency that enforces authentication when AUTH_ENABLED=true.
@@ -315,6 +385,7 @@ async def require_auth(
     """
     if not AUTH_ENABLED:
         _install_current_user(None)
+        _install_request_workspace(request)
         return None
 
     token = _extract_token(authorization, dt_token)
@@ -325,7 +396,12 @@ async def require_auth(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_token(token)
+    try:
+        payload = decode_token(token)
+    except IdentityStoreError as exc:
+        raise HTTPException(
+            status_code=503, detail="Account storage is temporarily unavailable."
+        ) from exc
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -333,8 +409,80 @@ async def require_auth(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    _install_current_user(payload)
+    try:
+        _install_current_user(payload)
+    except IdentityStoreError as exc:
+        raise HTTPException(
+            status_code=503, detail="Account storage is temporarily unavailable."
+        ) from exc
+    except PermissionError as exc:
+        # The second identity boundary (disabled/deleted account, stale role
+        # claim) rejected a token that was cryptographically valid. That is an
+        # authentication failure — the client must re-login — not a server
+        # error, and it must never surface as a 500.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    _install_request_workspace(request)
     return payload
+
+
+def _install_request_workspace(request) -> None:
+    from deeptutor.services.workspace.context import install_workspace_scope
+    from deeptutor.services.workspace.models import WorkspaceError
+
+    headers = getattr(request, "headers", {})
+    params = getattr(request, "query_params", {})
+    header = headers.get("x-deeptutor-workspace")
+    query = params.get("dt_workspace")
+    if header is not None and query is not None and header != query:
+        raise HTTPException(status_code=400, detail="Conflicting workspace scopes.")
+    try:
+        path = getattr(getattr(request, "url", None), "path", "")
+        from deeptutor.services.workspace.knowledge import library_request
+
+        library_request.set(
+            path.startswith(("/api/knowledge-bases", "/ws/knowledge-bases"))
+            and params.get("resource_library") == "true"
+        )
+        from deeptutor.services.skill.runtime import library_workspace
+
+        skill_workspace = (
+            params.get("skill_workspace", "") if path.startswith("/api/skills") else ""
+        )
+        library_workspace.set(skill_workspace)
+        catalog_management = library_request.get() or path.startswith(
+            ("/api/skills", "/api/space/mcp")
+        )
+        management = path.startswith(("/api/settings", "/api/auth", "/api/multi-user"))
+        selected = install_workspace_scope(
+            None if management or catalog_management else header if header is not None else query
+        )
+        if skill_workspace:
+            from deeptutor.services.workspace import get_content_workspace_service
+
+            service = get_content_workspace_service()
+            service.validate_chat_binding(
+                skill_workspace,
+                existing=getattr(request, "method", "GET") in {"GET", "HEAD", "OPTIONS"},
+            )
+        if (
+            not management
+            and selected.archived
+            and getattr(request, "method", "GET") not in {"GET", "HEAD", "OPTIONS"}
+        ):
+            raise WorkspaceError("Restore this workspace before changing its data.")
+        # Management/migration requests acquire their own exclusive lease.
+        if getattr(request, "method", None) is not None and not management:
+            from deeptutor.services.workspace.activity import acquire_activity
+
+            state = getattr(request, "state", None)
+            if state is not None and getattr(state, "workspace_activity", None) is None:
+                state.workspace_activity = acquire_activity()
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 class _WsAuthFailed:
@@ -365,16 +513,65 @@ async def ws_require_auth(ws: WebSocket) -> _CtxToken | _WsAuthFailed:
         finally:
             reset_current_user(user_token)
     """
-    if not AUTH_ENABLED:
-        return _install_current_user(None)
-
-    token = ws.query_params.get("token") or ws.cookies.get(_COOKIE_NAME)
-    payload = decode_token(token) if token else None
-    if not payload:
+    payload = None
+    token = None
+    if AUTH_ENABLED:
+        token = ws.query_params.get("token") or ws.cookies.get(_COOKIE_NAME)
+        payload = decode_token(token) if token else None
+        if not payload:
+            await ws.close(code=4001)
+            return ws_auth_failed
+    try:
+        user_token = _install_current_user(payload)
+    except PermissionError:
+        # Cryptographically valid token rejected by the identity boundary
+        # (disabled/deleted account, stale role claim): same handling as an
+        # undecodable token — the socket is rejected, never a server error.
         await ws.close(code=4001)
         return ws_auth_failed
+    try:
+        _install_request_workspace(ws)
+    except HTTPException:
+        reset_current_user(user_token)
+        await ws.close(code=4004)
+        return ws_auth_failed
 
-    return _install_current_user(payload)
+    # Keep every authenticated WebSocket revocable, including legacy progress,
+    # book, question, and mastery sockets that do not use the unified-turn
+    # adapter.  The request-scope middleware performs the matching cleanup
+    # when the handler returns.
+    try:
+        import asyncio
+
+        from deeptutor.multi_user.context import get_current_user
+        from deeptutor.multi_user.revocation import register
+
+        revoked = asyncio.Event()
+        handle = register(get_current_user().id, revoked.set)
+
+        async def close_when_revoked() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(revoked.wait(), timeout=2.0)
+                    break
+                except asyncio.TimeoutError:
+                    # The registry is process-local.  Revalidate the signed
+                    # token as well so a socket on another worker notices a
+                    # durable role/disable/delete mutation.
+                    if token and decode_token(token) is None:
+                        break
+            try:
+                await ws.close(code=4003, reason="Account access revoked")
+            except Exception:
+                pass
+
+        ws.scope["deeptutor.revocation"] = (handle, asyncio.create_task(close_when_revoked()))
+    except Exception:
+        # Authentication succeeded, but a best-effort watcher cannot be
+        # allowed to turn into a new access decision or break the socket setup.
+        # Durable token validation still protects subsequent connections.
+        logger.warning("Could not install WebSocket revocation watcher", exc_info=True)
+    return user_token
 
 
 async def require_admin(
@@ -498,7 +695,12 @@ async def auth_status(
         )
 
     token = _extract_token(authorization, dt_token)
-    payload = decode_token(token) if token else None
+    try:
+        payload = decode_token(token) if token else None
+    except IdentityStoreError as exc:
+        raise HTTPException(
+            status_code=503, detail="Account storage is temporarily unavailable."
+        ) from exc
     avatar = ""
     preset: AccountPreset | None = None
     learning_policy = None
@@ -664,84 +866,179 @@ async def logout(response: Response) -> dict:
     return {"ok": True}
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest) -> dict:
-    """
-    Bootstrap-only registration.
+def _registration_error(code: str, detail: str, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        {"detail": detail, "error_code": code},
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
 
-    Public endpoint that creates the *first* admin account when the user store
-    is empty. Once an admin exists, this endpoint is closed; further accounts
-    must be created by an admin via ``POST /api/auth/users``.
 
-    Only available when AUTH_ENABLED=true.
-    """
-    if not AUTH_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auth is disabled — registration is not available.",
-        )
-
-    if POCKETBASE_ENABLED:
-        # PocketBase deployments are documented as single-user. Keep registration
-        # closed and require admins to provision users in the PocketBase admin UI.
-        if not is_first_user():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Self-registration is closed. Ask an administrator to create your account.",
-            )
-        result = register_pb(username=body.username, email=body.username, password=body.password)
-        if not result:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Registration failed — username or email may already be taken.",
-            )
-        logger.info(f"First user registered via PocketBase: '{body.username}'")
-        return {
-            "ok": True,
-            "user_id": result.get("id", ""),
-            "username": body.username,
-            "role": "user",
-            "is_first_user": True,
-            "is_admin": False,
-        }
-
-    # Standard mode — only allowed before the first admin exists.
-    if not is_first_user():
+def _require_builtin_registration() -> None:
+    if not AUTH_ENABLED or POCKETBASE_ENABLED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Self-registration is closed. Ask an administrator to create your account.",
+            detail="Invitation registration requires built-in authentication.",
         )
+    from deeptutor.services.config import load_system_settings
 
-    existing = {u["username"] for u in list_users()}
-    if body.username in existing:
+    if int(load_system_settings().get("backend_workers") or 1) != 1:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already taken",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Built-in registration requires a single backend worker.",
         )
 
-    add_user(body.username, body.password)
-    user_id = ""
-    role = "user"
-    for item in list_users():
-        if item.get("username") == body.username:
-            user_id = str(item.get("id") or "")
-            role = str(item.get("role") or "user")
-            break
-    logger.info(f"First user (admin) registered: '{body.username}'")
+
+def _registration_unavailable() -> JSONResponse:
+    return _registration_error(
+        "identity_store_unavailable",
+        "Account registration is temporarily unavailable. Please try again later.",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+def _registration_cooldown(retry_after: int) -> JSONResponse:
+    return JSONResponse(
+        {
+            "detail": "Too many invalid invitation attempts. Please try again later.",
+            "error_code": "registration_rate_limited",
+        },
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"},
+    )
+
+
+@router.get("/registration-status", response_model=RegistrationStatusResponse)
+async def registration_status(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    if not AUTH_ENABLED or POCKETBASE_ENABLED:
+        return {"available": False, "is_first_user": False, "invite_required": False}
+    _require_builtin_registration()
+    try:
+        first = is_bootstrap_available()
+    except IdentityStoreError:
+        return _registration_unavailable()
+    return {"available": True, "is_first_user": first, "invite_required": not first}
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED, response_model=None)
+async def register(body: RegisterRequest, request: Request) -> dict | JSONResponse:
+    """Create the bootstrap admin, or atomically redeem an invitation for a user."""
+    _require_builtin_registration()
+    peer = registration_peer(
+        request.client.host if request.client else "unknown-peer",
+        request.headers,
+        await request.body(),
+    )
+    retry_after = registration_limiter.check(peer)
+    if retry_after:
+        return _registration_cooldown(retry_after)
+    try:
+        # Reject invalid codes before spending CPU on bcrypt. The store repeats
+        # this check under the transaction lock after hashing, so a revoke or
+        # another registration during hashing cannot admit an extra account.
+        validate_registration_invite(body.invite_code)
+        hashed = await run_in_threadpool(hash_password, body.password)
+        record = await run_in_threadpool(register_user, body.username, hashed, body.invite_code)
+    except InvalidInviteError:
+        retry_after = registration_limiter.failure(peer)
+        if retry_after:
+            return _registration_cooldown(retry_after)
+        return _registration_error(
+            "invalid_invite", "A valid invitation code is required.", status.HTTP_403_FORBIDDEN
+        )
+    except UserAlreadyExistsError:
+        return _registration_error(
+            "username_taken", "Username already taken", status.HTTP_409_CONFLICT
+        )
+    except IdentityStoreError:
+        logger.warning("Registration could not access the identity store")
+        return _registration_unavailable()
+    registration_limiter.success(peer)
+    # Anonymous registration has no installed CurrentUser. Its durable actor /
+    # redemption history belongs to the transaction, not log_admin_action().
+    logger.info("Registered account '%s' (role=%s)", body.username, record["role"])
     return {
         "ok": True,
-        "user_id": user_id,
+        "user_id": record["id"],
         "username": body.username,
-        "role": role,
-        "is_first_user": True,
-        "is_admin": role == "admin",
+        "role": record["role"],
+        "preset": record["preset"],
+        "is_first_user": record["is_first_user"],
+        "is_admin": record["role"] == "admin",
     }
+
+
+@router.post("/invites", status_code=status.HTTP_201_CREATED, response_model=None)
+async def issue_invites(
+    body: InviteCreateRequest,
+    response: Response,
+    current: TokenPayload = Depends(require_admin),
+) -> dict | JSONResponse:
+    _require_builtin_registration()
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        issued = create_invites(created_by=current.user_id, **body.model_dump())
+    except IdentityStoreError:
+        return _registration_unavailable()
+    log_admin_action(
+        "invite_create",
+        summary={
+            "invite_ids": [item["id"] for item in issued],
+            "batch_count": body.batch_count,
+            "max_uses": body.max_uses,
+            "expires_in_days": body.expires_in_days,
+        },
+    )
+    return {"invites": issued}
+
+
+@router.get("/invites", response_model=None)
+async def get_invites(
+    response: Response,
+    offset: int = 0,
+    limit: int = 50,
+    _: TokenPayload = Depends(require_admin),
+) -> dict | JSONResponse:
+    _require_builtin_registration()
+    if offset < 0 or not 1 <= limit <= 100:
+        raise HTTPException(status_code=422, detail="Invalid invitation pagination")
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return list_invites(offset=offset, limit=limit)
+    except IdentityStoreError:
+        return _registration_unavailable()
+
+
+@router.post("/invites/{invite_id}/revoke", response_model=None)
+async def revoke_invitation(
+    invite_id: str,
+    response: Response,
+    current: TokenPayload = Depends(require_admin),
+) -> dict | JSONResponse:
+    _require_builtin_registration()
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        item = revoke_invite(invite_id, revoked_by=current.user_id)
+    except IdentityStoreError:
+        return _registration_unavailable()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    log_admin_action("invite_revoke", summary={"invite_id": invite_id})
+    return {"invite": item, "ok": True}
 
 
 @router.get("/is_first_user")
 async def check_is_first_user() -> dict:
     """Return whether the user store is empty (used by the register UI)."""
-    return {"is_first_user": is_first_user() if AUTH_ENABLED else False}
+    try:
+        return {
+            "is_first_user": is_bootstrap_available()
+            if AUTH_ENABLED and not POCKETBASE_ENABLED
+            else False
+        }
+    except IdentityStoreError:
+        return _registration_unavailable()
 
 
 # ---------------------------------------------------------------------------
@@ -1106,6 +1403,23 @@ async def put_learner_profile(
     return {"learner_profile": updated}
 
 
+def _create_user_as_admin(current: TokenPayload, username: str, hashed: str, preset: AccountPreset):
+    # Password hashing yields the event loop. Re-check the administrator under
+    # the same lock as account creation, including password/token revocations
+    # which do not necessarily change the role.
+    with auth_store_transaction():
+        account = account_by_id(current.user_id)
+        record = account[1] if account else None
+        if (
+            not record
+            or record.get("role") != "admin"
+            or record.get("disabled")
+            or int(record.get("token_version", 0)) != current.token_version
+        ):
+            raise HTTPException(status_code=401, detail="Administrator session is no longer valid.")
+        return create_user(username, hashed, preset=preset)
+
+
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
     body: AdminCreateUserRequest,
@@ -1113,9 +1427,8 @@ async def admin_create_user(
 ) -> dict:
     """Admin-only: create a new user account.
 
-    Replaces the public ``/register`` flow once the first admin exists. The
-    new account is always created with role=``user``; admins can promote
-    later via ``PUT /users/{username}/role``.
+    Coexists with invitation registration. The new account starts with
+    role=``user``; admins can promote it later via ``PUT /users/{username}/role``.
     """
     if not AUTH_ENABLED:
         raise HTTPException(
@@ -1148,23 +1461,20 @@ async def admin_create_user(
             "preset": "standard",
         }
 
-    existing = {u["username"] for u in list_users()}
-    if body.username in existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already taken",
+    try:
+        hashed = await run_in_threadpool(hash_password, body.password)
+        record = await run_in_threadpool(
+            _create_user_as_admin, current, body.username, hashed, body.preset
         )
-
-    add_user(body.username, body.password, preset=body.preset)
-    user_id = ""
-    role = "user"
-    preset = "standard"
-    for item in list_users():
-        if item.get("username") == body.username:
-            user_id = str(item.get("id") or "")
-            role = str(item.get("role") or "user")
-            preset = str(item.get("preset") or "standard")
-            break
+    except UserAlreadyExistsError:
+        return _registration_error(
+            "username_taken", "Username already taken", status.HTTP_409_CONFLICT
+        )
+    except IdentityStoreError:
+        return _registration_unavailable()
+    user_id = record["id"]
+    role = record["role"]
+    preset = record["preset"]
     if preset == "learner":
         from deeptutor.multi_user.grants import learner_grant, save_grant
 
@@ -1216,12 +1526,14 @@ async def remove_user(
 
     # Capture the id before the record disappears so the avatar file can go too.
     info = get_user_info(username)
+    user_id = str(info.get("id") or "") if info else ""
+    previous_role = str(info.get("role") or "user") if info else "user"
 
     removed = delete_user(username)
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    user_id = str(info.get("id") or "") if info else ""
+    await terminate_revoked_user(user_id, previous_role=previous_role)
     if user_id and _USER_ID_RE.match(user_id):
         from deeptutor.multi_user.identity import delete_avatar_file
 
@@ -1244,6 +1556,9 @@ async def update_user_role(
             detail="You cannot change your own role",
         )
 
+    info = get_user_info(username)
+    user_id = str(info.get("id") or "") if info else ""
+    previous_role = str(info.get("role") or "user") if info else "user"
     updated = set_role(username, body.role)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -1251,4 +1566,39 @@ async def update_user_role(
     logger.info(
         f"Admin '{current.username if current else 'local'}' set '{username}' role to {body.role!r}"
     )
+    await terminate_revoked_user(user_id, previous_role=previous_role)
     return {"ok": True, "username": username, "role": body.role}
+
+
+@router.put("/users/{username}/disabled", status_code=status.HTTP_200_OK)
+async def update_user_disabled(
+    username: str,
+    body: SetDisabledRequest,
+    current: TokenPayload = Depends(require_admin),
+) -> dict:
+    """Disable/enable an account and invalidate its existing sessions."""
+
+    if current and username == current.username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot disable your own account",
+        )
+    if POCKETBASE_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PocketBase is not supported for multi-user accounts",
+        )
+    info = get_user_info(username)
+    user_id = str(info.get("id") or "") if info else ""
+    previous_role = str(info.get("role") or "user") if info else "user"
+    updated = set_disabled(username, body.disabled)
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    logger.info(
+        "Admin '%s' set '%s' disabled=%s",
+        current.username if current else "local",
+        username,
+        body.disabled,
+    )
+    await terminate_revoked_user(user_id, previous_role=previous_role)
+    return {"ok": True, "username": username, "disabled": body.disabled}

@@ -32,7 +32,12 @@ def _manager_for(base_dir: str) -> KnowledgeBaseManager:
 
 
 def current_kb_base_dir() -> Path:
-    return get_current_path_service().get_knowledge_bases_root()
+    from deeptutor.services.workspace.knowledge import library_request
+
+    from .paths import get_account_path_service
+
+    paths = get_account_path_service() if library_request.get() else get_current_path_service()
+    return paths.get_knowledge_bases_root()
 
 
 def admin_kb_base_dir() -> Path:
@@ -72,16 +77,36 @@ def _assigned_admin_names() -> set[str]:
 
 
 def resolve_kb(kb_ref: str, *, require_write: bool = False) -> KnowledgeResource:
+    from deeptutor.services.workspace.knowledge import (
+        learning_source_kbs,
+        library_request,
+        parse_kb_id,
+        resolve_qualified,
+        resolve_selected,
+    )
+    from deeptutor.services.workspace.resources import current_resources
+
+    if not require_write and kb_ref in learning_source_kbs.get():
+        return resolve_qualified(kb_ref)
+    selected = None if library_request.get() else current_resources().knowledge_bases
+    if selected is not None:
+        return resolve_selected(kb_ref, selected, require_write=require_write)
+    if parse_kb_id(kb_ref) is not None:
+        return resolve_qualified(kb_ref, require_write=require_write)
+    return _resolve_kb(kb_ref, require_write=require_write)
+
+
+def _resolve_kb(kb_ref: str, *, require_write: bool = False) -> KnowledgeResource:
     user = get_current_user()
     requested_source, name = _strip_resource_prefix(kb_ref)
 
     if user.is_admin:
-        manager = admin_kb_manager()
+        manager = current_kb_manager()
         resolved = _resolve_default_or_name(manager, name)
         return KnowledgeResource(
             id=f"admin:kb:{resolved}",
             name=resolved,
-            base_dir=admin_kb_base_dir(),
+            base_dir=current_kb_base_dir(),
             source="admin",
             assigned=False,
             read_only=False,
@@ -174,6 +199,19 @@ def manager_for_resource(resource: KnowledgeResource) -> KnowledgeBaseManager:
 
 
 def list_visible_knowledge_bases() -> list[dict[str, Any]]:
+    from deeptutor.services.workspace.knowledge import knowledge_catalog, library_request
+    from deeptutor.services.workspace.resources import current_resources
+
+    if library_request.get():
+        return knowledge_catalog()
+    selected = current_resources().knowledge_bases
+    if selected is None:
+        return _list_visible_knowledge_bases()
+    catalog = {item["id"]: item for item in knowledge_catalog()}
+    return [catalog[rid] for rid in selected if rid in catalog]
+
+
+def _list_visible_knowledge_bases() -> list[dict[str, Any]]:
     user = get_current_user()
     manager = current_kb_manager()
     items: list[dict[str, Any]] = []
@@ -277,6 +315,15 @@ def resolve_kb_manifest(
     entry = manager.get_kb_entry(resource.name)
     if entry is None:
         return None
+    if resource.source == "user":
+        external = entry.get("external_path") or entry.get("vault_path")
+        if external:
+            try:
+                from deeptutor.services.rag.linked_kb import assert_path_allowed
+
+                assert_path_allowed(str(external))
+            except ValueError:
+                return None
     return build_manifest(
         name=resource.name,
         kb_dir=resource.base_dir / resource.name,
@@ -313,6 +360,13 @@ def resolve_kb_document_path(kb_ref: str | None, rel_path: str) -> Path | None:
     root = document_root(resource.base_dir / resource.name, entry)
     if root is None or not root.is_dir():
         return None
+    if resource.source == "user" and (entry.get("external_path") or entry.get("vault_path")):
+        try:
+            from deeptutor.services.rag.linked_kb import assert_path_allowed
+
+            root = assert_path_allowed(str(root))
+        except ValueError:
+            return None
     try:
         resolved_root = root.resolve()
         candidate = (root / str(rel_path).strip()).resolve()

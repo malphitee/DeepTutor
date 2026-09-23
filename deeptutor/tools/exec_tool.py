@@ -180,6 +180,14 @@ class ExecTool(BaseTool):
         return ResourceLimits(timeout_s=max(1, min(timeout, _MAX_TIMEOUT)))
 
     async def execute(self, **kwargs: Any) -> ToolResult:
+        # Keep this before validation, artifact snapshots, and source-file
+        # creation.  Tool-list filtering is only a convenience; direct tool
+        # dispatch must not let an ordinary account touch a forged workdir.
+        from deeptutor.multi_user.execution_access import (
+            assert_sandbox_execution_allowed,
+        )
+
+        assert_sandbox_execution_allowed()
         code = str(kwargs.get("code") or "").strip()
         if not code:
             raise ValueError("exec requires non-empty 'code'.")

@@ -53,6 +53,11 @@ class ProgressTracker:
     def __init__(self, kb_name: str, base_dir: Path):
         self.kb_name = kb_name
         self.base_dir = base_dir
+        # ``base_dir`` is the tenant boundary for local KBs (and the shared
+        # admin boundary for explicitly assigned admin KBs).  Carry its
+        # canonical form through the progress event port so same-named KBs in
+        # different user trees never share a WebSocket channel.
+        self.scope_key = str(Path(base_dir).resolve())
         self.kb_dir = base_dir / kb_name
         self.progress_file = self.kb_dir / ".progress.json"
         self._callbacks: list = []  # Support multiple callbacks
@@ -78,7 +83,9 @@ class ProgressTracker:
 
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(broadcast_progress(self.kb_name, progress))
+                    loop.create_task(
+                        broadcast_progress(self.kb_name, progress, scope_key=self.scope_key)
+                    )
                 except RuntimeError:
                     pass
             except (ImportError, Exception):

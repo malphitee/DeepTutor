@@ -71,6 +71,12 @@ async def stream_process_lines(
     clean finish from an early break. stdout and stderr are interleaved in
     arrival order via a shared queue.
     """
+    # This is the final common boundary for local agent CLIs.  They inherit
+    # the app process's filesystem and credentials, so a caller that bypasses
+    # the HTTP route or consult tool must still fail closed for ordinary users.
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
     full_env = {**os.environ, **(env or {})}
     resolved_cmd = resolve_cli_command(cmd, path=full_env.get("PATH"))
     process = await asyncio.create_subprocess_exec(
@@ -159,6 +165,13 @@ async def probe_version(cmd: Sequence[str], *, timeout: float = 8.0) -> tuple[bo
     Used by backend ``detect`` to answer "is this CLI installed here?" without
     the no-timeout consult semantics — a probe that hangs is a failed probe.
     """
+    # Version discovery still executes an untrusted, host-local binary.  Keep
+    # the same boundary as the streaming path so an ordinary request cannot
+    # use a harmless-looking ``/detect`` or settings probe to run code with
+    # the server's environment and credentials.
+    from deeptutor.multi_user.execution_access import assert_local_subagent_execution_allowed
+
+    assert_local_subagent_execution_allowed()
     try:
         resolved_cmd = resolve_cli_command(cmd)
         process = await asyncio.create_subprocess_exec(

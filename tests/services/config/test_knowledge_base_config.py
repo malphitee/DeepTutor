@@ -72,6 +72,37 @@ class TestProviderApi:
 
 
 class TestPayloadNormalizationOnLoad:
+    def test_path_shaped_names_and_default_are_discarded(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "kb_config.json"
+        _write_kb_config(
+            config_path,
+            {
+                "defaults": {"default_kb": "../../system"},
+                "knowledge_bases": {
+                    "../../system": {"path": "../../system"},
+                    "safe-kb": {"path": "safe-kb"},
+                },
+            },
+        )
+
+        service = KnowledgeBaseConfigService(config_path=config_path)
+
+        assert service.get_default_kb() is None
+        assert set(service.get_all_configs()["knowledge_bases"]) == {"safe-kb"}
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            lambda service: service.get_kb_config("../../system"),
+            lambda service: service.set_kb_config("../../system", {}),
+            lambda service: service.delete_kb_config("../../system"),
+            lambda service: service.set_default_kb("../../system"),
+        ],
+    )
+    def test_path_shaped_names_are_rejected(self, fresh_service, operation) -> None:
+        with pytest.raises(ValueError, match="reserved characters"):
+            operation(fresh_service)
+
     def test_legacy_provider_in_file_is_rewritten_and_marks_reindex(self, tmp_path: Path) -> None:
         config_path = tmp_path / "kb_config.json"
         _write_kb_config(

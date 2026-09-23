@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from deeptutor.logging import configure_logging
+from deeptutor.multi_user.request_scope import UserScopeMiddleware
 from deeptutor.services.config import (
     ensure_runtime_settings_files,
     export_runtime_settings_to_env,
@@ -110,6 +111,27 @@ async def lifespan(app: FastAPI):
     # Execute on startup
     logger.info("Application startup")
     app.state.ready = False
+
+    # The built-in identity store is the isolation boundary.  Refuse to start
+    # a multi-user process that still points session/auth traffic at the old
+    # shared PocketBase control plane.
+    from deeptutor.services.auth import assert_supported_backend, log_isolation_mode
+
+    assert_supported_backend()
+    from deeptutor.services.auth import AUTH_ENABLED
+
+    if AUTH_ENABLED:
+        from deeptutor.multi_user.registration_limits import proxy_secret
+        from deeptutor.services.config import load_system_settings
+
+        if int(load_system_settings().get("backend_workers") or 1) != 1:
+            raise RuntimeError("Built-in user and invitation stores require backend_workers=1")
+        # A separate key authenticates socket addresses forwarded by the Next
+        # registration bridge. It is never a JWT key and never reaches a client.
+        proxy_secret(create=True)
+    # Announce which posture actually booted so a single-user compatibility
+    # deployment cannot be mistaken for the isolated multi-user mode.
+    log_isolation_mode()
 
     # Validate configuration consistency
     validate_tool_consistency()
@@ -366,6 +388,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Failed to stop EventBus: {e}")
 
 
+from deeptutor.services.workspace.activity import WorkspaceActivityMiddleware
+
 app = FastAPI(
     title="DeepTutor API",
     version="1.0.0",
@@ -376,6 +400,7 @@ app = FastAPI(
     # See: https://github.com/HKUDS/DeepTutor/issues/112
     redirect_slashes=False,
 )
+app.add_middleware(WorkspaceActivityMiddleware)
 
 
 @app.middleware("http")
@@ -465,6 +490,7 @@ logger.info(
     _cors_settings["allow_origins"],
     _cors_settings["allow_origin_regex"],
 )
+app.add_middleware(UserScopeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_settings["allow_origins"],
@@ -508,6 +534,7 @@ from deeptutor.api.routers import (
     partner_groups,
     partners,
     personas,
+    practice,
     question,
     question_notebook,
     quiz_judge,
@@ -618,6 +645,12 @@ app.include_router(
     question_notebook.router,
     prefix="/api/question-notebook",
     tags=["question-notebook"],
+    dependencies=_auth,
+)
+app.include_router(
+    practice.router,
+    prefix="/api/question-notebook/practice",
+    tags=["practice"],
     dependencies=_auth,
 )
 # Public UI-settings read (auth pages bootstrap the interface language

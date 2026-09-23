@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -35,11 +36,22 @@ def _validator_script(publication: str) -> str:
     return validator["steps"][0]["run"]
 
 
-def _run_validator(publication: str, tag: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_validator(
+    publication: str,
+    tag: str,
+    tmp_path: Path,
+    *,
+    event: str | None = None,
+    ref: str | None = None,
+    deleted: bool = False,
+) -> subprocess.CompletedProcess[str]:
     output = tmp_path / f"{publication}-output.txt"
     return subprocess.run(
         [sys.executable, "-c", _validator_script(publication)],
         env={
+            "GITHUB_EVENT_NAME": event or ("push" if publication == "docker" else "release"),
+            "GITHUB_REF": ref or f"refs/tags/{tag}",
+            "REF_DELETED": str(deleted).lower(),
             "RELEASE_TAG": tag,
             "GITHUB_OUTPUT": str(output),
             "PATH": os.environ["PATH"],
@@ -51,11 +63,18 @@ def _run_validator(publication: str, tag: str, tmp_path: Path) -> subprocess.Com
 
 
 @pytest.mark.parametrize("publication", RELEASE_WORKFLOWS)
-def test_non_version_release_tags_skip_publication(publication: str) -> None:
+def test_publication_events_are_guarded(publication: str) -> None:
     document, publish_job_name = _workflow(publication)
     validator = document["jobs"]["validate-release-tag"]
 
-    assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
+    if publication == "docker":
+        assert validator["if"] == (
+            "github.repository == 'malphitee/DeepTutor' && "
+            "github.event_name == 'push' && !github.event.deleted && "
+            "(github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))"
+        )
+    else:
+        assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
     assert document["jobs"][publish_job_name]["needs"] == "validate-release-tag"
 
 
@@ -64,6 +83,7 @@ def test_non_version_release_tags_skip_publication(publication: str) -> None:
     [
         ("docker", "v1.2.3"),
         ("docker", "v1.2.3rc1"),
+        ("docker", "v1.2.3-rc.1"),
         ("docker", "v1.2.3+build.1"),
         ("pypi", "v1.2.3"),
         ("pypi", "v1.2.3rc1"),
@@ -104,7 +124,7 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     result = _run_validator("docker", "v1.2.3+build.1", tmp_path)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "docker-output.txt").read_text() == (
-        "image_tag=1.2.3-build.1\nis_stable=false\n"
+        "image_tag=1.2.3-build.1\nis_stable=false\nchannel=production\n"
     )
 
     document, _ = _workflow("docker")
@@ -113,5 +133,266 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     )
     tags = metadata["with"]["tags"]
     assert "needs.validate-release-tag.outputs.image_tag" in tags
-    assert "github.event.release.prerelease == false" in tags
     assert "needs.validate-release-tag.outputs.is_stable == 'true'" in tags
+    assert "needs.validate-release-tag.outputs.channel == 'production'" in tags
+    assert metadata["with"]["flavor"] == "latest=false"
+
+
+def test_dev_push_selects_test_channel_without_latest(tmp_path: Path):
+    result = _run_validator("docker", "", tmp_path, ref="refs/heads/dev")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "docker-output.txt").read_text() == (
+        "image_tag=dev\nis_stable=false\nchannel=test\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tag", "image_tag", "stable"),
+    [
+        ("v0.0.0", "0.0.0", True),
+        ("v1.2.3", "1.2.3", True),
+        ("v1.2.3a1", "1.2.3a1", False),
+        ("v1.2.3rc1", "1.2.3rc1", False),
+        ("v1.2.3.post1", "1.2.3.post1", False),
+        ("v1.2.3.dev1", "1.2.3.dev1", False),
+        ("v1.2.3-rc.1", "1.2.3-rc.1", False),
+        ("v1.2.3-beta.2+build.3", "1.2.3-beta.2-build.3", False),
+        ("v1.2.3+build.1", "1.2.3-build.1", False),
+    ],
+)
+def test_version_push_selects_production_and_only_plain_versions_are_stable(
+    tmp_path: Path, tag: str, image_tag: str, stable: bool
+):
+    result = _run_validator("docker", tag, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "docker-output.txt").read_text() == (
+        f"image_tag={image_tag}\nis_stable={str(stable).lower()}\nchannel=production\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("event", "ref", "deleted"),
+    [
+        ("push", "refs/heads/main", False),
+        ("push", "refs/heads/feature/user-isolation", False),
+        ("push", "refs/heads/dev-copy", False),
+        ("push", "refs/tags/dev", False),
+        ("push", "refs/tags/1.2.3", False),
+        ("push", "refs/heads/dev", True),
+        ("push", "refs/tags/v1.2.3", True),
+        ("release", "refs/tags/v1.2.3", False),
+        ("workflow_dispatch", "refs/heads/dev", False),
+        ("workflow_dispatch", "refs/tags/v1.2.3", False),
+        ("pull_request", "refs/heads/dev", False),
+    ],
+)
+def test_docker_rejects_other_events_refs_and_deletions(tmp_path, event, ref, deleted):
+    result = _run_validator("docker", "", tmp_path, event=event, ref=ref, deleted=deleted)
+    assert result.returncode != 0
+    assert not (tmp_path / "docker-output.txt").exists()
+
+
+def test_docker_publishes_one_build_to_both_owned_registries():
+    document, publish_job_name = _workflow("docker")
+    # PyYAML follows YAML 1.1, where the Actions key `on` is parsed as True.
+    triggers = document[True]
+    assert triggers == {"push": {"branches": ["dev"], "tags": ["v*"]}}
+    assert document["permissions"]["packages"] == "write"
+    assert document["concurrency"]["cancel-in-progress"] is False
+    assert document["concurrency"]["group"] == (
+        "docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}"
+    )
+    assert document["env"]["GHCR_IMAGE"] == "ghcr.io/malphitee/deeptutor"
+    assert document["env"]["CNB_IMAGE"] == "docker.cnb.cool/johnnliu/deeptutor"
+
+    steps = document["jobs"][publish_job_name]["steps"]
+    logins = {
+        step["with"]["registry"]: step["with"]
+        for step in steps
+        if step.get("uses", "").startswith("docker/login-action@")
+    }
+    assert logins["ghcr.io"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert logins["docker.cnb.cool"]["username"] == "cnb"
+    assert logins["docker.cnb.cool"]["password"] == "${{ secrets.CNB_TOKEN }}"
+
+    metadata = next(step["with"] for step in steps if step.get("id") == "meta")
+    assert metadata["images"].splitlines() == ["${{ env.GHCR_IMAGE }}", "${{ env.CNB_IMAGE }}"]
+    assert metadata["tags"].splitlines() == [
+        "type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}",
+        "type=sha,format=short,prefix=${{ "
+        "needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}",
+        "type=raw,value=latest,enable=${{ "
+        "needs.validate-release-tag.outputs.channel == 'production' && "
+        "needs.validate-release-tag.outputs.is_stable == 'true' }}",
+    ]
+    assert document["env"]["DOCKER_METADATA_SHORT_SHA_LENGTH"] == "12"
+    builders = [
+        step["with"]
+        for step in steps
+        if step.get("uses", "").startswith("docker/build-push-action@")
+    ]
+    assert len(builders) == 1
+    assert builders[0]["target"] == "production"
+    assert builders[0]["platforms"] == "${{ matrix.platform }}"
+    assert "tags" not in builders[0]
+    assert builders[0]["outputs"] == (
+        'type=image,"name=${{ env.GHCR_IMAGE }},${{ env.CNB_IMAGE }}",'
+        "push-by-digest=true,name-canonical=true,push=true"
+    )
+    assert builders[0]["provenance"] is False
+    assert builders[0]["sbom"] is False
+
+
+def test_native_architecture_builds_only_publish_tags_after_both_succeed():
+    document, _ = _workflow("docker")
+    build = document["jobs"]["build-and-push"]
+    assert build["runs-on"] == "${{ matrix.runner }}"
+    assert build["strategy"]["fail-fast"] is False
+    assert build["strategy"]["matrix"]["include"] == [
+        {"arch": "amd64", "platform": "linux/amd64", "runner": "ubuntu-24.04"},
+        {"arch": "arm64", "platform": "linux/arm64", "runner": "ubuntu-24.04-arm"},
+    ]
+    assert not any("setup-qemu" in step.get("uses", "") for step in build["steps"])
+    builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
+    assert builder["cache-from"] == "type=gha,scope=deeptutor-${{ matrix.arch }}"
+    assert builder["cache-to"] == "type=gha,mode=max,scope=deeptutor-${{ matrix.arch }}"
+    upload = next(
+        step["with"]
+        for step in build["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    )
+    assert upload["name"] == "image-digests-${{ matrix.arch }}"
+    assert upload["if-no-files-found"] == "error"
+    assert upload["overwrite"] is True
+    publish = document["jobs"]["publish-manifest"]
+    assert publish["needs"] == ["validate-release-tag", "build-and-push"]
+    assert "if" not in publish  # Do not publish a partial build using always().
+    build_metadata = next(step["with"] for step in build["steps"] if step.get("id") == "meta")
+    publish_metadata = next(step["with"] for step in publish["steps"] if step.get("id") == "meta")
+    assert publish_metadata == build_metadata
+
+
+def _publication_fixture(tmp_path: Path, monkeypatch):
+    """Exercise the actual publication script with a simulated Docker registry."""
+    images = ("ghcr.io/malphitee/deeptutor", "docker.cnb.cool/johnnliu/deeptutor")
+    digests = {"amd64": "sha256:" + "a" * 64, "arm64": "sha256:" + "b" * 64}
+    directory = tmp_path / "digests"
+    for arch, digest in digests.items():
+        artifact = directory / f"image-digests-{arch}"
+        artifact.mkdir(parents=True)
+        (artifact / f"{arch}.digest").write_text(digest + "\n")
+    tags = [f"{image}:{tag}" for image in images for tag in ("dev", "dev-sha-0123456789ab")]
+    monkeypatch.setenv("GHCR_IMAGE", images[0])
+    monkeypatch.setenv("CNB_IMAGE", images[1])
+    monkeypatch.setenv("DIGEST_DIR", str(directory))
+    monkeypatch.setenv("METADATA_JSON", json.dumps({"tags": tags}))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    calls = []
+    behavior = {}
+
+    def docker(command, **kwargs):
+        calls.append(command)
+        assert command[:3] == ["docker", "buildx", "imagetools"]
+        if command[3] == "create":
+            if behavior.get("push_failure") and images[1] in command[5]:
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0)
+        assert command[3] == "inspect"
+        reference = command[4]
+        if "@" in reference:
+            arch = next(arch for arch, digest in digests.items() if reference.endswith(digest))
+            result = {"os": "linux", "architecture": behavior.get("source_arch", arch)}
+        else:
+            entries = [
+                {"platform": {"os": "linux", "architecture": arch}, "digest": digest}
+                for arch, digest in digests.items()
+            ]
+            if behavior.get("missing_platform"):
+                entries.pop()
+            if behavior.get("wrong_child"):
+                entries[0]["digest"] = "sha256:" + "e" * 64
+            suffix = (
+                "d" if behavior.get("different_digest") and reference.startswith(images[1]) else "c"
+            )
+            result = {"digest": "sha256:" + suffix * 64, "manifests": entries}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(result))
+
+    monkeypatch.setattr(subprocess, "run", docker)
+    document, _ = _workflow("docker")
+    script = next(
+        step["run"]
+        for step in document["jobs"]["publish-manifest"]["steps"]
+        if step.get("id") == "publish"
+    )
+    return script, directory, images, digests, tags, calls, behavior
+
+
+def test_manifest_publication_combines_same_digests_in_both_registries(tmp_path, monkeypatch):
+    script, _, images, digests, tags, calls, _ = _publication_fixture(tmp_path, monkeypatch)
+    exec(compile(script, "publish-manifests", "exec"), {})
+    creates = [call for call in calls if call[3] == "create"]
+    assert len(creates) == 2
+    assert all(call[3] == "inspect" for call in calls[:4])
+    for image, command in zip(images, creates, strict=True):
+        assert command[-2:] == [f"{image}@{digest}" for digest in digests.values()]
+        assert [command[i + 1] for i, value in enumerate(command) if value == "--tag"] == [
+            tag for tag in tags if tag.startswith(image + ":")
+        ]
+    assert "sha256:" + "c" * 64 in (tmp_path / "summary.md").read_text()
+
+
+@pytest.mark.parametrize("damage", ["missing", "extra", "malformed", "duplicate"])
+def test_manifest_publication_rejects_invalid_digest_artifacts(tmp_path, monkeypatch, damage):
+    script, directory, _, digests, _, calls, _ = _publication_fixture(tmp_path, monkeypatch)
+    target = directory / "image-digests-arm64/arm64.digest"
+    if damage == "missing":
+        target.unlink()
+    elif damage == "extra":
+        (directory / "unexpected.digest").write_text(digests["amd64"])
+    elif damage == "malformed":
+        target.write_text("sha256:not-a-digest")
+    else:
+        target.write_text(digests["amd64"])
+    with pytest.raises(SystemExit):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert calls == []
+
+
+@pytest.mark.parametrize("damage", ["foreign_repository", "unequal_tags", "invalid_tag"])
+def test_manifest_publication_rejects_unexpected_tags(tmp_path, monkeypatch, damage):
+    script, _, _, _, tags, calls, _ = _publication_fixture(tmp_path, monkeypatch)
+    if damage == "foreign_repository":
+        tags.append("ghcr.io/unrelated/image:latest")
+    elif damage == "unequal_tags":
+        tags.pop()
+    else:
+        tags[0] += ";unexpected"
+    monkeypatch.setenv("METADATA_JSON", json.dumps({"tags": tags}))
+    with pytest.raises(SystemExit):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert calls == []
+
+
+def test_manifest_publication_rejects_wrong_source_arch_before_tagging(tmp_path, monkeypatch):
+    script, _, _, _, _, calls, behavior = _publication_fixture(tmp_path, monkeypatch)
+    behavior["source_arch"] = "riscv64"
+    with pytest.raises(SystemExit, match="Unexpected platform"):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert not any(call[3] == "create" for call in calls)
+
+
+@pytest.mark.parametrize("damage", ["missing_platform", "wrong_child", "different_digest"])
+def test_manifest_publication_fails_if_registry_result_is_inconsistent(tmp_path, monkeypatch, damage):
+    script, _, _, _, _, _, behavior = _publication_fixture(tmp_path, monkeypatch)
+    behavior[damage] = True
+    with pytest.raises(SystemExit):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert not (tmp_path / "summary.md").exists()
+
+
+def test_manifest_publication_does_not_hide_one_registry_push_failure(tmp_path, monkeypatch):
+    script, _, _, _, _, _, behavior = _publication_fixture(tmp_path, monkeypatch)
+    behavior["push_failure"] = True
+    with pytest.raises(subprocess.CalledProcessError):
+        exec(compile(script, "publish-manifests", "exec"), {})
+    assert not (tmp_path / "summary.md").exists()

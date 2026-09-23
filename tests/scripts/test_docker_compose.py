@@ -73,6 +73,24 @@ def test_workspace_host_prepares_nested_outputs(tmp_path: Path) -> None:
     assert (root / "outputs").is_dir()
 
 
+def test_docker_wrapper_selects_the_docker_compose_file() -> None:
+    module = _load_module()
+
+    command = module._compose_command(["config", "-q"])
+
+    assert command[command.index("-f") + 1] == str(module.DOCKER_COMPOSE_FILE)
+    assert command[command.index("--env-file") + 1] == str(module.DOCKER_ENV_PATH)
+
+
+def test_docker_wrapper_preserves_an_explicit_compose_file() -> None:
+    module = _load_module()
+
+    command = module._compose_command(["-f", "docker-compose.ghcr.yml", "up", "-d"])
+
+    assert str(module.DOCKER_COMPOSE_FILE) not in command
+    assert command[command.index("-f") + 1] == "docker-compose.ghcr.yml"
+
+
 def test_compose_maps_one_stable_content_workspace() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "docker-compose.yml").read_text(encoding="utf-8")
@@ -93,6 +111,22 @@ def test_compose_files_do_not_consume_legacy_env_names() -> None:
         assert "\n      - BACKEND_PORT" not in content
         assert "\n      - AUTH_ENABLED" not in content
         assert "DEEPTUTOR_DOCKER_BACKEND_PORT" in content
+
+
+def test_compose_files_forward_only_explicit_middleware_env_names() -> None:
+    root = Path(__file__).resolve().parents[2]
+    required = (
+        "DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES",
+        "DEEPTUTOR_TURN_COORDINATION_BACKEND",
+        "DEEPTUTOR_REDIS_URL",
+        "DEEPTUTOR_REDIS_KEY_PREFIX",
+        "POCKETBASE_URL",
+        "POCKETBASE_ADMIN_PASSWORD",
+    )
+    for name in ("docker-compose.yml", "docker-compose.ghcr.yml", "compose.yaml"):
+        source = (root / name).read_text(encoding="utf-8")
+        for key in required:
+            assert f"{key}=" in source, (name, key)
 
 
 def _compose_service(root: Path, name: str) -> dict:
@@ -147,13 +181,13 @@ def test_container_docs_use_temporary_codex_oauth_bridge() -> None:
     """README links to the canonical guide, which owns the exact commands."""
     root = Path(__file__).resolve().parents[2]
     readme = (root / "README.md").read_text(encoding="utf-8")
-    guide = (root / "CONTAINERIZATION.md").read_text(encoding="utf-8")
+    guide = (root / "docs-for-user" / "CONTAINERIZATION.md").read_text(encoding="utf-8")
     heading = "### Temporary local Codex OAuth bridge"
     assert heading in guide, f"{heading} was renamed; update this test with it"
     section = guide.split(heading, 1)[1].split("\n### ", 1)[0]
     normalized_section = " ".join(section.replace("\\\n", " ").split())
 
-    assert "CONTAINERIZATION.md#temporary-local-codex-oauth-bridge" in readme
+    assert "docs-for-user/CONTAINERIZATION.md#temporary-local-codex-oauth-bridge" in readme
     assert "127.0.0.1:1455:3782" in section
     assert "127.0.0.1:1457:3782" in section
     for base_file in ("docker-compose.yml", "docker-compose.ghcr.yml"):
@@ -182,6 +216,34 @@ def test_dockerfile_is_json_driven_without_bundle_sed() -> None:
     assert "DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES=1" in content
     assert 'unset "$key"' in content
     assert "export_runtime_settings_to_env" in content
+
+
+def test_standalone_frontend_matches_the_container_target_architecture() -> None:
+    """Next's standalone bundle includes native sharp, not only static assets.
+
+    A BUILDPLATFORM frontend stage copies amd64 native modules into arm64
+    images. Both the frontend dependencies and Node runtime must use the
+    target platform, and the production image must verify native loading.
+    """
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+    for stage in ("frontend-builder", "node-runtime"):
+        assert re.search(
+            rf"^FROM (?:--platform=\$TARGETPLATFORM )?node:\S+ AS {stage}$",
+            content,
+            re.MULTILINE,
+        ), f"{stage} must install dependencies for the target architecture"
+
+    production = content.split("AS production\n", 1)[1].split(
+        "FROM production AS development", 1
+    )[0]
+    standalone_copy = production.index(
+        "COPY --from=frontend-builder /app/web/.next/standalone/ ./web/"
+    )
+    native_check = production.index(
+        "RUN node -e \"require('/app/web/node_modules/sharp')\""
+    )
+    assert native_check > standalone_copy
 
 
 def test_supervisord_runs_as_root_with_unprivileged_children() -> None:

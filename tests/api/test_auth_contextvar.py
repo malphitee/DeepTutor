@@ -143,6 +143,12 @@ def test_require_auth_propagates_admin_contextvar_to_endpoint(monkeypatch) -> No
         "decode_token",
         lambda _t: TokenPayload(username="root", role="admin", user_id="u_root"),
     )
+    # The admin must exist in the identity store — an unknown account holding
+    # an admin claim is rejected by user_from_token_payload (fail-closed).
+    monkeypatch.setattr(
+        "deeptutor.multi_user.identity.get_user_by_id",
+        lambda _uid: ("root", {"role": "admin", "disabled": False}),
+    )
 
     app = FastAPI()
 
@@ -156,6 +162,80 @@ def test_require_auth_propagates_admin_contextvar_to_endpoint(monkeypatch) -> No
 
     assert resp.status_code == 200
     assert resp.json() == {"role": "admin"}
+
+
+def test_require_auth_returns_401_for_identity_rejected_token(monkeypatch) -> None:
+    """A cryptographically valid token rejected by the identity boundary must
+    surface as 401 (re-login), never as a 500 from the error boundary."""
+    from deeptutor.api.routers import auth as auth_router
+    from deeptutor.services.auth import TokenPayload
+
+    monkeypatch.setattr(auth_router, "AUTH_ENABLED", True)
+    monkeypatch.setattr(
+        auth_router,
+        "decode_token",
+        lambda _t: TokenPayload(username="ghost", role="admin", user_id="u_ghost"),
+    )
+    monkeypatch.setattr("deeptutor.multi_user.identity.get_user_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.account_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.POCKETBASE_ENABLED", False)
+
+    app = FastAPI()
+
+    @app.get("/whoami")
+    async def whoami(_=Depends(auth_router.require_auth)) -> dict:
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        resp = client.get("/whoami", headers={"Authorization": "Bearer test-token"})
+
+    assert resp.status_code == 401
+    assert "detail" in resp.json()
+
+
+def test_install_current_user_rejects_admin_claim_for_unknown_account(monkeypatch) -> None:
+    """An admin role claim for an account with no record must fail closed.
+
+    This is the second boundary for adapters/tests that pass a TokenPayload
+    directly, bypassing decode_token's unknown-account rule: after an account
+    is deleted (without a tombstone row) or never existed, its stale admin
+    claim must not turn into an admin CurrentUser.
+    """
+    import pytest
+
+    from deeptutor.api.routers.auth import _install_current_user
+    from deeptutor.services.auth import TokenPayload
+
+    monkeypatch.setattr("deeptutor.multi_user.identity.get_user_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.account_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.POCKETBASE_ENABLED", False)
+
+    with pytest.raises(PermissionError):
+        _install_current_user(TokenPayload(username="ghost", role="admin", user_id="u_ghost"))
+
+
+def test_install_current_user_keeps_pb_role_for_unknown_account(monkeypatch) -> None:
+    """In PocketBase mode the local store is not the identity authority.
+
+    Accounts live in PocketBase and the payload role was just re-read via
+    auth-refresh, so an absent local record must not demote or reject it.
+    """
+    from deeptutor.api.routers.auth import _install_current_user
+    from deeptutor.multi_user.context import get_current_user_or_none, reset_current_user
+    from deeptutor.services.auth import TokenPayload
+
+    monkeypatch.setattr("deeptutor.multi_user.identity.get_user_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.account_by_id", lambda _uid: None)
+    monkeypatch.setattr("deeptutor.services.auth.POCKETBASE_ENABLED", True)
+
+    token = _install_current_user(TokenPayload(username="pb-admin", role="admin", user_id="u_pb"))
+    try:
+        user = get_current_user_or_none()
+        assert user is not None
+        assert user.role == "admin"
+        assert user.id == "u_pb"
+    finally:
+        reset_current_user(token)
 
 
 def test_path_service_resolves_per_user_workspace_through_dependency(monkeypatch, tmp_path) -> None:

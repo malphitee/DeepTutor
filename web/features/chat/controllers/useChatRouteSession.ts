@@ -26,8 +26,8 @@ export function useChatRouteSession() {
   const params = useParams<{ sessionId?: string }>();
   const router = useRouter();
   const sessionId = useMemo(
-    () => routeSessionId(params.sessionId),
-    [params.sessionId],
+    () => routeSessionId(params?.sessionId),
+    [params?.sessionId],
   );
   return { router, sessionId };
 }

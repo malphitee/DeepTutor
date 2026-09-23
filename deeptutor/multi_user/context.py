@@ -5,10 +5,15 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from typing import Any
 
-from .models import CurrentUser
+from .models import LOCAL_ADMIN_ID, LOCAL_ADMIN_USERNAME, CurrentUser
 from .paths import local_admin_user, scope_for_user
 
 _current_user: ContextVar[CurrentUser | None] = ContextVar("deeptutor_current_user", default=None)
+_request_active: ContextVar[bool] = ContextVar("deeptutor_request_active", default=False)
+
+
+class MissingUserScope(PermissionError):
+    """A request attempted private access before authentication installed its scope."""
 
 
 def set_current_user(user: CurrentUser) -> Token[CurrentUser | None]:
@@ -20,11 +25,24 @@ def reset_current_user(token: Token[CurrentUser | None]) -> None:
 
 
 def get_current_user() -> CurrentUser:
-    return _current_user.get() or local_admin_user()
+    user = _current_user.get()
+    if user is not None:
+        return user
+    if _request_active.get():
+        raise MissingUserScope("An authenticated user scope is required")
+    # Non-request startup and local CLI compatibility. ASGI always clears this
+    # context and marks requests before routing, including public endpoints.
+    return local_admin_user()
 
 
 def get_current_user_or_none() -> CurrentUser | None:
     return _current_user.get()
+
+
+def request_scope_active() -> bool:
+    """Whether the ASGI request boundary has installed fail-closed scope."""
+
+    return _request_active.get()
 
 
 def user_from_token_payload(payload: Any | None) -> CurrentUser:
@@ -33,6 +51,45 @@ def user_from_token_payload(payload: Any | None) -> CurrentUser:
     user_id = str(getattr(payload, "user_id", "") or "")
     username = str(getattr(payload, "username", "") or "local")
     role = str(getattr(payload, "role", "user") or "user")
+    # Decode normally performs this lookup already.  Re-check here as a second
+    # boundary for adapters/tests that pass a TokenPayload directly: a stale
+    # role claim must never turn into an admin CurrentUser after an account
+    # change, and disabled/deleted accounts must fail closed.
+    record: tuple[str, dict[str, Any]] | None = None
+    if user_id:
+        from .identity import get_user_by_id
+
+        record = get_user_by_id(user_id)
+        if record is None:
+            # The auth.json bootstrap admin exists only in the overlay that
+            # decode_token authorizes against; resolve it the same way before
+            # treating the account as unknown.
+            from deeptutor.services.auth import account_by_id
+
+            record = account_by_id(user_id)
+    if record is not None:
+        record_username, record_data = record
+        if bool(record_data.get("disabled", False)):
+            raise PermissionError("This account is disabled")
+        username = record_username
+        role = str(record_data.get("role") or "user")
+    else:
+        from .identity import deleted_identity_revoked
+
+        if user_id and deleted_identity_revoked(username, user_id):
+            raise PermissionError("This account is no longer available")
+        # No local record vouches for this identity. PocketBase is the
+        # authority in PocketBase mode (its role was just re-read via
+        # auth-refresh), and the server-minted local-admin synthetic identity
+        # passes as-is; every other claim must be plain "user", mirroring
+        # decode_token's unknown-account rule.
+        from deeptutor.services.auth import POCKETBASE_ENABLED
+
+        is_local_admin_identity = user_id == LOCAL_ADMIN_ID or (
+            not user_id and username == LOCAL_ADMIN_USERNAME
+        )
+        if not POCKETBASE_ENABLED and not is_local_admin_identity and role != "user":
+            raise PermissionError("This account cannot hold the requested role")
     if role not in {"admin", "user"}:
         role = "user"
     if not user_id:

@@ -34,6 +34,12 @@ class VisualReviewService:
         self.review_dir.mkdir(parents=True, exist_ok=True)
 
     async def build_attachments(self, render_result: RenderResult) -> list[Attachment]:
+        # Frame extraction invokes ffmpeg/ffprobe directly.  It is only part of
+        # the Manim pipeline and must obey the same ordinary-user execution
+        # boundary as the renderer itself.
+        from deeptutor.multi_user.execution_access import assert_manim_execution_allowed
+
+        assert_manim_execution_allowed()
         if render_result.output_mode == "image":
             await self._emit_progress(
                 f"Preparing {len(render_result.artifacts)} rendered image(s) for visual review."

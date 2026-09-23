@@ -99,7 +99,28 @@ def _normalize_learning_policy(value: Any) -> dict[str, Any] | None:
 
 def grant_path(user_id: str) -> Path:
     ensure_system_dirs()
-    return GRANTS_DIR / f"{user_id}.json"
+    value = str(user_id or "")
+    if (
+        not value
+        or value in {".", ".."}
+        or Path(value).name != value
+        or "/" in value
+        or "\\" in value
+        or "\x00" in value
+    ):
+        raise ValueError("Invalid grant user id")
+    if GRANTS_DIR.is_symlink():
+        raise ValueError("Grant directory cannot be a symbolic link")
+    root = GRANTS_DIR.resolve()
+    candidate = GRANTS_DIR / f"{value}.json"
+    if candidate.is_symlink():
+        raise ValueError("Grant file cannot be a symbolic link")
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Grant file leaves the grant directory") from exc
+    return resolved
 
 
 def normalize_grant(user_id: str, payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -159,7 +180,10 @@ def learner_grant(user_id: str) -> dict[str, Any]:
 
 
 def load_grant(user_id: str) -> dict[str, Any]:
-    path = grant_path(user_id)
+    try:
+        path = grant_path(user_id)
+    except (OSError, ValueError):
+        return empty_grant(str(user_id or ""))
     if not path.exists():
         return empty_grant(user_id)
     try:

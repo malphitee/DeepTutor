@@ -58,9 +58,9 @@ function PartnerDetail() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { t } = useTranslation();
-  const partnerId = params.partnerId;
+  const partnerId = params?.partnerId ?? "";
 
-  const initialTab = (searchParams.get("tab") as Tab) || "chat";
+  const initialTab = (searchParams?.get("tab") as Tab) || "chat";
   const [tab, setTab] = useState<Tab>(
     ["chat", "configure", "channels", "archive"].includes(initialTab)
       ? initialTab
@@ -182,6 +182,7 @@ function PartnerDetail() {
   ]);
 
   const load = useCallback(async () => {
+    if (!partnerId) return;
     try {
       setPartner(await getPartner(partnerId));
     } catch {

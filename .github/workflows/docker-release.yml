@@ -1,50 +1,74 @@
-name: Docker Release
+name: Docker Images
 
-# Triggered when a GitHub Release is published.
-# Builds a multi-platform Docker image and pushes it to GitHub Container Registry (GHCR).
+# Build each architecture once and publish the same image to both registries.
+# Pushes to dev publish test images; version-tag pushes publish production images.
+# Only stable version tags update latest. This fork owns both destinations below.
 #
-# Image: ghcr.io/hkuds/deeptutor
-# Tags:
-#   - Version tag stripped of 'v' prefix (e.g. release v1.2.3 → image tag 1.2.3)
-#   - latest (always points to the most recently published release)
-#
-# Platforms: linux/amd64, linux/arm64
+# GHCR: ghcr.io/malphitee/deeptutor
+# CNB:  docker.cnb.cool/johnnliu/deeptutor
 
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - dev
+    tags:
+      - 'v*'
+
+# Serialize each publication channel, including different production tags.
+concurrency:
+  group: docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
   packages: write
 
+env:
+  GHCR_IMAGE: ghcr.io/malphitee/deeptutor
+  CNB_IMAGE: docker.cnb.cool/johnnliu/deeptutor
+  DOCKER_METADATA_SHORT_SHA_LENGTH: "12"
+
 jobs:
   validate-release-tag:
-    name: Validate release tag
-    if: startsWith(github.event.release.tag_name, 'v')
+    name: Validate publication event
+    if: github.repository == 'malphitee/DeepTutor' && github.event_name == 'push' && !github.event.deleted && (github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.validate.outputs.image_tag }}
       is_stable: ${{ steps.validate.outputs.is_stable }}
+      channel: ${{ steps.validate.outputs.channel }}
     steps:
-      - name: Require an image version tag
+      - name: Validate dev or version-tag push
         id: validate
         shell: python
         run: |
           import os
           import re
 
-          tag = os.environ["RELEASE_TAG"]
+          if os.environ.get("GITHUB_EVENT_NAME") != "push" or os.environ.get("REF_DELETED") == "true":
+              raise SystemExit("Images are published only for non-deletion pushes")
+          ref = os.environ["GITHUB_REF"]
+          if ref == "refs/heads/dev":
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("image_tag=dev\nis_stable=false\nchannel=test\n")
+              raise SystemExit(0)
+          if not ref.startswith("refs/tags/"):
+              raise SystemExit("Only dev or a version tag can publish images")
+
+          tag = ref.removeprefix("refs/tags/")
           pattern = (
               r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+              r"(?:"
               r"(?:(?:a|b|rc)(?:0|[1-9]\d*))?"
               r"(?:\.post(?:0|[1-9]\d*))?"
               r"(?:\.dev(?:0|[1-9]\d*))?"
+              r"|-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*"
+              r")"
               r"(?:\+[0-9A-Za-z]+(?:[._-][0-9A-Za-z]+)*)?$"
           )
           if not re.fullmatch(pattern, tag):
               raise SystemExit(
-                  f"Release tag {tag!r} is not an image version tag "
+                  f"Git tag {tag!r} is not an image version tag "
                   "(expected vX.Y.Z with an optional suffix)."
               )
           # '+' is valid version metadata but not valid in an OCI tag.
@@ -56,25 +80,38 @@ jobs:
                   + str(bool(re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag))).lower()
                   + "\n"
               )
+              output.write("channel=production\n")
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_DELETED: ${{ github.event.deleted }}
 
   build-and-push:
-    name: Build and Push Multi-Platform Docker Image
+    name: Build ${{ needs.validate-release-tag.outputs.channel }} (${{ matrix.arch }})
     needs: validate-release-tag
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Required for linux/arm64 cross-compilation on GitHub-hosted ubuntu runners
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # Enable BuildKit with multi-platform build support
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Check CNB credentials are configured
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "::error::Set the repository Actions secret CNB_TOKEN before publishing."
+            exit 1
+          fi
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -83,30 +120,206 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to CNB Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: docker.cnb.cool
+          username: cnb
+          password: ${{ secrets.CNB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       # The validated version drops the leading 'v'. Pre-releases retain a
       # versioned image but never replace the stable 'latest' tag.
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/hkuds/deeptutor
+          images: |
+            ${{ env.GHCR_IMAGE }}
+            ${{ env.CNB_IMAGE }}
+          flavor: latest=false
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
-            type=raw,value=latest,enable=${{ github.event.release.prerelease == false && needs.validate-release-tag.outputs.is_stable == 'true' }}
+            type=sha,format=short,prefix=${{ needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}
+            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           target: production
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: mode=max
-          sbom: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          # CNB rejected the generated attestation manifests as UNKNOWN.
+          # Publish ordinary image manifests until that format is validated.
+          provenance: false
+          sbom: false
+          # No public tags until both architectures have reached both registries.
+          outputs: type=image,"name=${{ env.GHCR_IMAGE }},${{ env.CNB_IMAGE }}",push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          # Use GitHub Actions cache to speed up repeated builds
-          # mode=max caches all intermediate layers (frontend-builder and python-base are expensive)
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=deeptutor-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=deeptutor-${{ matrix.arch }}
+
+      - name: Record published digest
+        shell: python
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+          DIGEST_DIR: ${{ runner.temp }}/image-digests
+        run: |
+          import os
+          from pathlib import Path
+          import re
+
+          digest = os.environ["IMAGE_DIGEST"]
+          arch = os.environ["IMAGE_ARCH"]
+          if arch not in {"amd64", "arm64"} or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("Build did not produce a valid platform digest")
+          directory = Path(os.environ["DIGEST_DIR"])
+          directory.mkdir(parents=True, exist_ok=True)
+          (directory / f"{arch}.digest").write_text(digest + "\n", encoding="utf-8")
+
+      - name: Upload platform digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image-digests/${{ matrix.arch }}.digest
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish-manifest:
+    name: Publish and verify both registries
+    needs: [validate-release-tag, build-and-push]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download platform digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-digests-*
+          path: ${{ runner.temp }}/image-digests
+          merge-multiple: false
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to CNB Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: docker.cnb.cool
+          username: cnb
+          password: ${{ secrets.CNB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.GHCR_IMAGE }}
+            ${{ env.CNB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
+            type=sha,format=short,prefix=${{ needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}
+            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
+
+      - name: Publish and verify manifests
+        id: publish
+        shell: python
+        env:
+          DIGEST_DIR: ${{ runner.temp }}/image-digests
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          architectures = ("amd64", "arm64")
+          directory = Path(os.environ["DIGEST_DIR"])
+          expected_paths = {
+              f"image-digests-{arch}/{arch}.digest" for arch in architectures
+          }
+          actual_paths = {
+              str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()
+          }
+          if actual_paths != expected_paths:
+              raise SystemExit("Expected exactly one digest artifact for amd64 and arm64")
+          digests = {}
+          for arch in architectures:
+              digest = (directory / f"image-digests-{arch}/{arch}.digest").read_text().strip()
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                  raise SystemExit(f"Invalid digest artifact for {arch}")
+              digests[arch] = digest
+          if len(set(digests.values())) != 2:
+              raise SystemExit("Platform digests must be distinct")
+
+          images = (os.environ["GHCR_IMAGE"], os.environ["CNB_IMAGE"])
+          tags = json.loads(os.environ["METADATA_JSON"])["tags"]
+          if not isinstance(tags, list) or not tags or len(tags) != len(set(tags)):
+              raise SystemExit("Expected nonempty unique publication tags")
+          tags_by_image = {image: [] for image in images}
+          for tag in tags:
+              if not isinstance(tag, str):
+                  raise SystemExit("Invalid publication tag")
+              image, separator, suffix = tag.rpartition(":")
+              if image not in tags_by_image or not separator or not re.fullmatch(r"[\w][\w.-]{0,127}", suffix, re.ASCII):
+                  raise SystemExit(f"Unexpected publication destination: {tag}")
+              tags_by_image[image].append(tag)
+          suffixes = [{tag.rpartition(":")[2] for tag in tags_by_image[image]} for image in images]
+          if not suffixes[0] or suffixes[0] != suffixes[1]:
+              raise SystemExit("Both registries must receive the same tags")
+
+          def inspect(reference, field):
+              result = subprocess.run(
+                  ["docker", "buildx", "imagetools", "inspect", reference, "--format", "{{json ." + field + "}}"],
+                  check=True, capture_output=True, text=True,
+              )
+              return json.loads(result.stdout)
+
+          # Confirm both registries have both runnable platforms before moving any tag.
+          for image in images:
+              for arch in architectures:
+                  config = inspect(f"{image}@{digests[arch]}", "Image")
+                  if config.get("os") != "linux" or config.get("architecture") != arch:
+                      raise SystemExit(f"Unexpected platform for {image}@{digests[arch]}")
+
+          for image in images:
+              command = ["docker", "buildx", "imagetools", "create"]
+              for tag in tags_by_image[image]:
+                  command.extend(["--tag", tag])
+              command.extend(f"{image}@{digests[arch]}" for arch in architectures)
+              subprocess.run(command, check=True)
+
+          expected_platforms = {("linux", arch): digests[arch] for arch in architectures}
+          index_digests = set()
+          for tag in tags:
+              manifest = inspect(tag, "Manifest")
+              entries = manifest.get("manifests", [])
+              platforms = {
+                  (entry.get("platform", {}).get("os"), entry.get("platform", {}).get("architecture")): entry.get("digest")
+                  for entry in entries
+              }
+              digest = manifest.get("digest", "")
+              if len(entries) != 2 or platforms != expected_platforms or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                  raise SystemExit(f"Invalid published platform manifest: {tag}")
+              index_digests.add(digest)
+          if len(index_digests) != 1:
+              raise SystemExit("Published tags or registries have different image digests")
+          digest = index_digests.pop()
+          print(f"Verified linux/amd64 and linux/arm64 in both registries: {digest}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"Both registries verified at `{digest}` (linux/amd64, linux/arm64).\n\n")
+              summary.writelines(f"- `{tag}`\n" for tag in tags)

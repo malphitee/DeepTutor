@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from deeptutor.multi_user import identity, paths
 from deeptutor.multi_user.context import reset_current_user, set_current_user
 from deeptutor.multi_user.models import CurrentUser, UserScope
@@ -88,3 +90,42 @@ def test_legacy_migration_never_overwrites_existing_targets(tmp_path, monkeypatc
     assert (legacy / "u_alice" / "old.txt").read_text() == "legacy"
     assert (users_root / "u_bob" / "data.txt").read_text() == "bob"
     assert legacy.exists()
+
+
+def test_legacy_migration_rejects_symbolic_link_root(tmp_path, monkeypatch):
+    legacy_target = tmp_path / "outside"
+    legacy_target.mkdir()
+    legacy = tmp_path / "multi-user"
+    try:
+        legacy.symlink_to(legacy_target, target_is_directory=True)
+    except OSError:
+        pytest.skip("Creating symlinks is unavailable on this platform")
+
+    monkeypatch.setattr(paths, "LEGACY_MULTI_USER_ROOT", legacy)
+    monkeypatch.setattr(paths, "USERS_ROOT", tmp_path / "data" / "users")
+    monkeypatch.setattr(paths, "SYSTEM_ROOT", tmp_path / "data" / "system")
+    monkeypatch.setattr(paths, "ADMIN_WORKSPACE_ROOT", tmp_path / "data")
+    monkeypatch.setattr(paths, "_legacy_migration_done", False)
+
+    with pytest.raises(PermissionError, match="symbolic link"):
+        paths.migrate_legacy_multi_user_tree()
+
+
+def test_system_directory_symlinks_are_rejected(tmp_path, monkeypatch):
+    system_root = tmp_path / "data" / "system"
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True)
+    system_root.mkdir(parents=True)
+    try:
+        (system_root / "auth").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Creating symlinks is unavailable on this platform")
+
+    monkeypatch.setattr(paths, "LEGACY_MULTI_USER_ROOT", tmp_path / "missing-legacy")
+    monkeypatch.setattr(paths, "SYSTEM_ROOT", system_root)
+    monkeypatch.setattr(paths, "ADMIN_WORKSPACE_ROOT", tmp_path / "data")
+    monkeypatch.setattr(paths, "USERS_ROOT", tmp_path / "data" / "users")
+    monkeypatch.setattr(paths, "_legacy_migration_done", False)
+
+    with pytest.raises(PermissionError, match="symbolic link"):
+        paths.ensure_system_dirs()

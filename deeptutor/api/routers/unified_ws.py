@@ -8,6 +8,7 @@ when the owner worker has disappeared and leader recovery is still pending.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any
@@ -18,7 +19,9 @@ from pydantic import TypeAdapter, ValidationError
 from deeptutor.api.contracts.turn_protocol import (
     PROTOCOL_VERSION,
     ClientCommand,
+    StartTurnCommand,
 )
+from deeptutor.services.workspace.models import WorkspaceError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -42,7 +45,8 @@ def _clean_answers(value: Any) -> list[dict[str, Any]] | None:
 async def unified_websocket(ws: WebSocket) -> None:
     from deeptutor.api.routers.auth import ws_auth_failed, ws_require_auth
     from deeptutor.app.container import get_application_container
-    from deeptutor.multi_user.context import reset_current_user
+    from deeptutor.multi_user.context import get_current_user, reset_current_user
+    from deeptutor.multi_user.revocation import register, unregister
 
     user_token = await ws_require_auth(ws)
     if user_token is ws_auth_failed:
@@ -51,6 +55,8 @@ async def unified_websocket(ws: WebSocket) -> None:
     await ws.accept()
     closed = False
     subscription_tasks: dict[str, asyncio.Task[None]] = {}
+    revoked = asyncio.Event()
+    current_user = get_current_user()
 
     # Resolve once after authentication. Context variables are copied into
     # subscription tasks, so the socket remains in one stable StoreScope.
@@ -59,6 +65,7 @@ async def unified_websocket(ws: WebSocket) -> None:
         container = get_application_container()
         await container.start()
     turns = container.turns
+    revocation_handle = register(current_user.id, revoked.set)
 
     async def safe_send(data: dict[str, Any]) -> None:
         nonlocal closed
@@ -135,7 +142,21 @@ async def unified_websocket(ws: WebSocket) -> None:
         except asyncio.CancelledError:
             pass
 
+    async def _watch_revocation() -> None:
+        await revoked.wait()
+        if closed:
+            return
+        try:
+            await ws.close(code=4003, reason="Account access revoked")
+        except Exception:
+            pass
+        for key in list(subscription_tasks):
+            await stop_subscription(key)
+
     async def subscribe_turn(turn_id: str, after_seq: int = 0) -> None:
+        if await turns.get_turn(turn_id) is None:
+            await send_error("Turn not found.", error_code="turn_not_found", turn_id=turn_id)
+            return
         async def _forward() -> None:
             try:
                 async for event in turns.subscribe_turn(turn_id, after_seq=after_seq):
@@ -155,6 +176,9 @@ async def unified_websocket(ws: WebSocket) -> None:
         subscription_tasks[turn_id] = asyncio.create_task(_forward())
 
     async def subscribe_session(session_id: str, after_seq: int = 0) -> None:
+        if await turns.get_session(session_id) is None:
+            await send_error("Session not found.", error_code="session_not_found", session_id=session_id)
+            return
         async def _forward() -> None:
             try:
                 async for event in turns.subscribe_session(session_id, after_seq=after_seq):
@@ -174,6 +198,7 @@ async def unified_websocket(ws: WebSocket) -> None:
         await stop_subscription(key)
         subscription_tasks[key] = asyncio.create_task(_forward())
 
+    revocation_task = asyncio.create_task(_watch_revocation())
     try:
         while not closed:
             raw = await ws.receive_text()
@@ -204,7 +229,14 @@ async def unified_websocket(ws: WebSocket) -> None:
                 )
                 continue
 
-            msg = command.model_dump(mode="python")
+            # A continuing turn omits workspace_id to inherit its binding.
+            # Filling defaults here would turn that omission into an explicit
+            # null (and also turn an omitted parent into a root-branch edit).
+            msg = (
+                command.to_payload()
+                if isinstance(command, StartTurnCommand)
+                else command.model_dump(mode="python")
+            )
 
             msg_type = msg.get("type")
 
@@ -217,7 +249,7 @@ async def unified_websocket(ws: WebSocket) -> None:
                             if key not in {"type", "protocol_version"}
                         }
                     )
-                except RuntimeError as exc:
+                except (RuntimeError, WorkspaceError) as exc:
                     await send_error(
                         str(exc),
                         error_code="start_turn_rejected",
@@ -324,7 +356,7 @@ async def unified_websocket(ws: WebSocket) -> None:
                 overrides = msg.get("overrides") if isinstance(msg.get("overrides"), dict) else None
                 try:
                     _, turn = await turns.regenerate_last_turn(session_id, overrides=overrides)
-                except RuntimeError as exc:
+                except (RuntimeError, WorkspaceError) as exc:
                     await send_error(
                         str(exc),
                         error_code="regenerate_rejected",
@@ -369,7 +401,11 @@ async def unified_websocket(ws: WebSocket) -> None:
         await send_error(str(exc), error_code="internal_error", retryable=True)
     finally:
         closed = True
+        revocation_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await revocation_task
         for key in list(subscription_tasks):
             await stop_subscription(key)
+        unregister(revocation_handle)
         if user_token is not None:
             reset_current_user(user_token)

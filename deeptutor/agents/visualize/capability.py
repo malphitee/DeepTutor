@@ -95,6 +95,12 @@ class VisualizeCapability(TurnCapability):
     async def run(self, context: UnifiedContext, stream: StreamBus) -> None:
         request_config = validate_visualize_request_config(context.config_overrides)
         render_mode = request_config.render_mode
+        from deeptutor.multi_user.execution_access import assert_capability_execution_allowed
+
+        # Explicit Manim requests are blocked before any renderer setup.  The
+        # _run_manim_path method repeats this check for auto-routed/direct
+        # callers whose final render mode is selected later.
+        assert_capability_execution_allowed(self.name, render_mode=render_mode)
         i18n = StatusI18n(self.name, context.language, module="visualize")
         registry = get_visualizer_registry()
 
@@ -266,6 +272,13 @@ class VisualizeCapability(TurnCapability):
         the final result with ``render_type`` as the discriminator so the
         unified frontend dispatcher can route to ``MathAnimatorViewer``.
         """
+        from deeptutor.multi_user.execution_access import assert_manim_execution_allowed
+
+        # Keep the guard directly adjacent to this capability's subprocess
+        # path.  It covers auto-selected Manim output and direct callers that
+        # bypass TurnRequestPreparer.
+        assert_manim_execution_allowed()
+
         import importlib.util
         import time
 

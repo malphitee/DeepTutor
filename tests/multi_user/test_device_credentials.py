@@ -379,6 +379,12 @@ def test_disabled_account_fails_closed(mu_isolated_root, monkeypatch):
 
 
 def test_heartbeat_enforces_freshness_daily_limit_and_day_rollover(mu_isolated_root, monkeypatch):
+    from deeptutor.multi_user import device_credentials
+
+    # Keep the exhaustion checks in one UTC day even when the suite runs near
+    # midnight; the explicit +86_400 step below exercises the daily reset.
+    started = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(device_credentials, "utc_now", lambda: started)
     client, users = _client(mu_isolated_root, monkeypatch)
     learner_id = users["learner"]["id"]
     issued = client.post(
@@ -403,8 +409,6 @@ def test_heartbeat_enforces_freshness_daily_limit_and_day_rollover(mu_isolated_r
         headers=_auth(users["admin_token"]),
     ).json()["devices"]
     started = datetime.fromisoformat(listed[0]["last_heartbeat_at"])
-
-    from deeptutor.multi_user import device_credentials
 
     monkeypatch.setattr(device_credentials, "utc_now", lambda: started)
     first = client.post("/api/auth/device/heartbeat", headers=_auth(token))

@@ -48,7 +48,7 @@ export default function CourseDetailPage() {
   const { t } = useTranslation();
   const router = useRouter();
   const params = useParams<{ courseId: string }>();
-  const courseId = String(params.courseId || "");
+  const courseId = String(params?.courseId || "");
   const [course, setCourse] = useState<StudyCourse | null>(null);
   const [courses, setCourses] = useState<StudyCourse[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -59,6 +59,7 @@ export default function CourseDetailPage() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const load = useCallback(async () => {
+    if (!courseId) return;
     setLoading(true);
     try {
       const [nextCourses, nextSessions, nextState] = await Promise.all([
@@ -168,7 +169,7 @@ export default function CourseDetailPage() {
 
   const removeSession = useCallback(
     async (sessionId: string) => {
-      if (!window.confirm(t("Delete this chat?"))) return;
+      if (!window.confirm(t("Permanently delete this chat and its tutor threads? This cannot be undone."))) return;
       await deleteSession(sessionId);
       await load();
     },

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -19,8 +18,10 @@ import uuid
 
 from deeptutor.core.context import WorkspaceRuntimeContext
 from deeptutor.multi_user.context import get_current_user
-from deeptutor.services.path_service import get_path_service
+from deeptutor.multi_user.paths import get_account_path_service as get_path_service
 from deeptutor.services.settings.interface_settings import atomic_update
+from deeptutor.services.workspace.catalog import WorkspaceCatalogMixin
+from deeptutor.services.workspace.models import WorkspaceBinding, WorkspaceError, WorkspaceItem
 from deeptutor.utils.secret_files import ensure_private_directory
 
 _SETTINGS_VERSION = 1
@@ -30,48 +31,6 @@ _ALLOWED_ROOTS_ENV = "DEEPTUTOR_WORKSPACE_ALLOWED_ROOTS"
 _INTERNAL_DIR = ".deeptutor"
 _MAX_SEARCH_SCAN_ENTRIES = 10_000
 _SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-class WorkspaceError(ValueError):
-    """A workspace path, binding, or operation is not allowed."""
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceBinding:
-    workspace_id: str
-    root: Path
-    display_name: str
-    is_default: bool = False
-    locked: bool = False
-
-    def public_dict(self, *, security_level: str, status: str = "ready") -> dict[str, Any]:
-        return {
-            "workspace_id": self.workspace_id,
-            "path": str(self.root),
-            "display_name": self.display_name,
-            "is_default": self.is_default,
-            "locked": self.locked,
-            "status": status,
-            "security_level": security_level,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceItem:
-    workspace_id: str
-    workspace_item_id: str
-    relative_path: str
-    filename: str
-    mime_type: str
-    size_bytes: int
-    sha256: str
-    url: str
-    title: str = ""
-    caption: str = ""
-    generated: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 def _utc_now() -> str:
@@ -118,8 +77,16 @@ def _normalise_relative(path: str) -> str:
     return PurePosixPath(*parts).as_posix()
 
 
-class ContentWorkspaceService:
-    """Resolve the current user's one active content workspace."""
+class ContentWorkspaceService(WorkspaceCatalogMixin):
+    """Resolve system, general and custom content workspaces.
+
+    The legacy current folder remains available to non-chat callers. Chat
+    turns resolve a durable binding before execution and never follow it.
+    """
+
+    @staticmethod
+    def _paths():
+        return get_path_service()
 
     def _settings_file(self) -> Path:
         return get_path_service().get_settings_file(_SETTINGS_NAME)
@@ -128,15 +95,29 @@ class ContentWorkspaceService:
         return get_path_service().get_workspace_dir().resolve()
 
     def _deployment_root(self) -> Path | None:
+        if not get_current_user().is_admin:
+            return None
         raw = os.environ.get(_DEPLOYMENT_ROOT_ENV, "").strip()
         return Path(raw).expanduser().resolve() if raw else None
 
     def _allowed_roots(self) -> tuple[Path, ...]:
+        user = get_current_user()
+        if not user.is_admin:
+            # Configured roots are deployment-wide.  A regular account may use
+            # one only when it is a subdirectory of its own scoped root; its
+            # catalog trees (managed workspaces, session artifacts) are derived
+            # from the same scoped root, so they stay inside the boundary.
+            return (
+                self._default_root(),
+                self._managed_root().resolve(),
+                self._session_root().resolve(),
+            )
         raw = os.environ.get(_ALLOWED_ROOTS_ENV, "")
         roots = [
             Path(value).expanduser().resolve() for value in raw.split(os.pathsep) if value.strip()
         ]
         roots.append(self._default_root())
+        roots.extend([self._managed_root().resolve(), self._session_root().resolve()])
         deployment = self._deployment_root()
         if deployment is not None:
             roots.append(deployment)
@@ -188,15 +169,27 @@ class ContentWorkspaceService:
                 if not isinstance(row, dict) or str(row.get("id") or "") != active_id:
                     continue
                 raw_path = str(row.get("path") or "").strip()
-                if raw_path:
-                    root = Path(raw_path).expanduser().resolve()
-                    binding = self._binding(root, is_default=root == self._default_root())
+                if not raw_path:
+                    raise WorkspaceError("The workspace is no longer registered for this user.")
+                self._assert_no_symlink_path(Path(raw_path).expanduser())
+                root = Path(raw_path).expanduser().resolve()
+                self._assert_allowed_root(root)
+                binding = self._binding(root, is_default=root == self._default_root())
+                if binding.workspace_id != active_id:
+                    raise WorkspaceError("The workspace is no longer registered for this user.")
                 break
+            else:
+                if active_id:
+                    raise WorkspaceError("The active workspace is not registered.")
+        self._assert_allowed_root(binding.root)
         if ensure_output:
             self._ensure_ready(binding)
         return binding
 
     def binding_by_id(self, workspace_id: str) -> WorkspaceBinding:
+        for row in self._catalog():
+            if row.get("workspace_id") == workspace_id:
+                return self._registered_binding(row)
         current = self.current_binding()
         self._assert_allowed_root(current.root)
         if current.workspace_id == workspace_id:
@@ -207,7 +200,9 @@ class ContentWorkspaceService:
         for row in self._read_settings().get("bindings") or []:
             if not isinstance(row, dict) or str(row.get("id") or "") != workspace_id:
                 continue
-            root = Path(str(row.get("path") or "")).expanduser().resolve()
+            raw_path = Path(str(row.get("path") or "")).expanduser()
+            self._assert_no_symlink_path(raw_path)
+            root = raw_path.resolve()
             self._assert_allowed_root(root)
             binding = self._binding(root, is_default=root == self._default_root())
             # Binding ids are derived from both the user id and the physical
@@ -235,6 +230,9 @@ class ContentWorkspaceService:
 
     def _ensure_ready(self, binding: WorkspaceBinding) -> None:
         root = binding.root
+        self._assert_allowed_root(root)
+        if binding.is_default:
+            ensure_private_directory(root)
         if not root.exists() or not root.is_dir():
             raise WorkspaceError("The selected workspace folder does not exist.")
         self._assert_allowed_root(root)
@@ -263,7 +261,9 @@ class ContentWorkspaceService:
         binding = (
             self.default_binding()
             if path is None
-            else self._binding(Path(path).expanduser().resolve(), is_default=False)
+            else self._binding(
+                self._checked_requested_root(Path(path).expanduser()), is_default=False
+            )
         )
         try:
             self._ensure_ready(binding)
@@ -282,7 +282,9 @@ class ContentWorkspaceService:
         binding = (
             self.default_binding()
             if path is None
-            else self._binding(Path(path).expanduser().resolve(), is_default=False)
+            else self._binding(
+                self._checked_requested_root(Path(path).expanduser()), is_default=False
+            )
         )
         self._ensure_ready(binding)
 
@@ -312,6 +314,24 @@ class ContentWorkspaceService:
         atomic_update(self._settings_file(), _mutate)
         return binding
 
+    def _checked_requested_root(self, path: Path) -> Path:
+        self._assert_no_symlink_path(path)
+        return path.resolve()
+
+    def _assert_no_symlink_path(self, path: Path) -> None:
+        """Reject user-selected roots containing a symlink component."""
+
+        if get_current_user().is_admin:
+            return
+        probe = path if path.is_absolute() else (Path.cwd() / path)
+        while True:
+            if probe.is_symlink():
+                raise WorkspaceError("Workspace paths cannot contain symbolic links.")
+            parent = probe.parent
+            if parent == probe:
+                break
+            probe = parent
+
     def describe_current(self) -> dict[str, Any]:
         binding = self.current_binding()
         status = self.validate(binding.root)
@@ -330,12 +350,25 @@ class ContentWorkspaceService:
         capability: str,
         session_id: str,
         turn_id: str,
+        workspace_id: str | None = None,
     ) -> WorkspaceRuntimeContext:
-        binding = self.current_binding(ensure_output=True)
+        self.assert_available()
+        binding = (
+            self.current_binding()
+            if workspace_id is None
+            else self.binding_by_id(workspace_id)
+            if workspace_id
+            else self.session_binding(session_id)
+        )
+        self._ensure_ready(binding)
         logical = PurePosixPath(
             "outputs",
             _safe_component(capability, "chat"),
-            _safe_component(session_id, "direct"),
+            (
+                _safe_component(session_id, "direct")
+                if _safe_component(session_id, "direct") == session_id
+                else f"{_safe_component(session_id, 'direct')}_{hashlib.sha256(session_id.encode()).hexdigest()[:12]}"
+            ),
             _safe_component(turn_id, "turn"),
         ).as_posix()
         output = self.resolve(binding, logical, write=True)
@@ -352,6 +385,7 @@ class ContentWorkspaceService:
         self, binding: WorkspaceBinding, relative_path: str, *, write: bool = False
     ) -> Path:
         relative = _normalise_relative(relative_path)
+        self._assert_no_symlink_components(binding, relative, operation="workspace")
         if write and PurePosixPath(relative).parts[0] != "outputs":
             raise WorkspaceError("Writes outside outputs require an explicit user grant.")
         candidate = (binding.root / Path(*PurePosixPath(relative).parts)).resolve()
@@ -367,7 +401,9 @@ class ContentWorkspaceService:
             relative = candidate.relative_to(binding.root)
         except ValueError as exc:
             raise WorkspaceError("The path is outside the selected workspace.") from exc
-        return PurePosixPath(*relative.parts).as_posix()
+        value = PurePosixPath(*relative.parts).as_posix()
+        self._assert_no_symlink_components(binding, value, operation="workspace")
+        return value
 
     @staticmethod
     def _assert_no_symlink_components(
@@ -377,6 +413,10 @@ class ContentWorkspaceService:
         for part in PurePosixPath(relative_path).parts:
             cursor /= part
             if cursor.is_symlink():
+                try:
+                    cursor.resolve().relative_to(binding.root)
+                except ValueError as exc:
+                    raise WorkspaceError(f"The {operation} path leaves the workspace.") from exc
                 raise WorkspaceError(f"The {operation} path cannot contain symbolic links.")
 
     @staticmethod
@@ -385,7 +425,14 @@ class ContentWorkspaceService:
 
         if not re.fullmatch(r"ws_[0-9a-f]{32}", binding.workspace_id):
             raise WorkspaceError("Invalid workspace id.")
-        base = get_path_service().get_runtime_state_dir()
+        from deeptutor.services.path_service import get_path_service as get_scoped_paths
+        from deeptutor.services.workspace.context import current_workspace_id
+
+        base = (
+            get_scoped_paths().get_workspace_dir()
+            if current_workspace_id()
+            else get_path_service().get_runtime_state_dir()
+        )
         presentations = base / "workspace_presentations"
         root = presentations / binding.workspace_id
         if create:
@@ -621,6 +668,8 @@ class ContentWorkspaceService:
         binding: WorkspaceBinding,
         items: Iterable[Mapping[str, Any]],
     ) -> list[WorkspaceItem]:
+        from deeptutor.services.workspace.context import current_workspace_id, workspace_url
+
         prepared: list[tuple[Mapping[str, Any], str, Path]] = []
         for raw in items:
             relative = _normalise_relative(str(raw.get("path") or ""))
@@ -674,13 +723,14 @@ class ContentWorkspaceService:
                 mime_type=mime_type,
                 size_bytes=size,
                 sha256=sha256,
-                url=(
+                url=workspace_url(
                     f"/files/workspace-items/{quote(binding.workspace_id, safe='')}/"
                     f"{quote(item_id, safe='')}"
                 ),
                 title=str(raw.get("title") or "")[:200],
                 caption=str(raw.get("caption") or "")[:1000],
                 generated=relative.startswith("outputs/"),
+                data_workspace_id=current_workspace_id(),
             )
             manifest = manifests / f"{item_id}.json"
             payload = item.to_dict()
@@ -790,6 +840,10 @@ class ContentWorkspaceService:
             raise WorkspaceError("The presented workspace item is unavailable.") from exc
         if item.workspace_id != workspace_id or item.workspace_item_id != workspace_item_id:
             raise WorkspaceError("The workspace item manifest is invalid.")
+        from deeptutor.services.workspace.context import current_workspace_id, get_workspace_scope
+
+        if get_workspace_scope() is not None and item.data_workspace_id != current_workspace_id():
+            raise WorkspaceError("The presented item belongs to another workspace.")
         blob = (root / "blobs" / item.sha256).resolve()
         try:
             blob.relative_to(root.resolve())

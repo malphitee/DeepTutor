@@ -1,5 +1,9 @@
 "use client";
 
+import { scopedUrl } from "@/lib/workspace-scope";
+import { READING_HOME, readingSessionIdFromPath } from "@/lib/learning-routes";
+
+
 import { browserStorage } from "@/shared/storage";
 
 import Link from "next/link";
@@ -34,7 +38,6 @@ import { useTranslation } from "react-i18next";
 import type { JumpRequest } from "@/components/reading/PdfDocumentView";
 import { READER_ASK_EVENT, ReaderPane } from "@/components/reading/ReaderPane";
 import { useChatStateAdapter } from "@/features/chat/ChatStateAdapter";
-import { readingSessionIdFromPath } from "@/lib/mastery-session";
 import type { ReaderHeading } from "@/lib/reading-outline";
 import { setReadingViewport } from "@/lib/reading-turn-state";
 import { listNotebooks, type NotebookSummary } from "@/lib/notebook-api";
@@ -91,12 +94,24 @@ interface ReaderAskDetail {
 
 export function ReadingWorkspacePage() {
   const params = useParams<{ workspaceId: string }>();
-  const workspaceId = params.workspaceId;
   // From the path, not from route params: the first turn binds its session id
   // with the native history API so the workspace is not torn down mid-answer,
   // and `useParams` does not follow that — `usePathname` does.
-  const sessionIdParam = readingSessionIdFromPath(usePathname());
-  const courseId = useSearchParams().get("course")?.trim() ?? "";
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  if (!params || !pathname || !searchParams) return null;
+  return <ReadingWorkspaceContent
+    workspaceId={params.workspaceId}
+    sessionIdParam={readingSessionIdFromPath(pathname)}
+    courseId={searchParams.get("course")?.trim() ?? ""}
+  />;
+}
+
+function ReadingWorkspaceContent({ workspaceId, sessionIdParam, courseId }: {
+  workspaceId: string;
+  sessionIdParam: string | null;
+  courseId: string;
+}) {
   const router = useRouter();
   const { t } = useTranslation();
   // The shell only needs to *send* (guided one-click prompts). Rendering the
@@ -196,7 +211,7 @@ export function ReadingWorkspacePage() {
     useState<ReadingConversation | null>(null);
   const [companionOpen, setCompanionOpen] = useState(true);
   const [navigatorOpen, setNavigatorOpen] = useState(false);
-  const [navigatorCollapsed, setNavigatorCollapsed] = useState(false);
+  const [navigatorCollapsed, setNavigatorCollapsed] = useState(true);
   const [documentJump, setDocumentJump] = useState<JumpRequest | null>(null);
   const [pageHeadings, setPageHeadings] = useState<ReaderHeading[]>([]);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
@@ -304,7 +319,7 @@ export function ReadingWorkspacePage() {
         <CircleAlert size={25} className="text-[var(--primary)]" />
         <p className="mt-3 text-[13px] font-medium">{error}</p>
         <Link
-          href="/reading"
+          href={scopedUrl(READING_HOME)}
           className="mt-5 rounded-xl bg-[var(--primary)] px-4 py-2 text-[11px] font-semibold text-[var(--primary-foreground)]"
         >
           {t("Back to library")}
@@ -346,7 +361,7 @@ export function ReadingWorkspacePage() {
     <main className="reading-v2 flex h-full min-h-0 flex-col overflow-hidden bg-[var(--background)] text-[var(--foreground)] dark:bg-[var(--background)] dark:text-[var(--foreground)]">
       <header className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--border)] bg-[var(--card)] px-2.5">
         <Link
-          href="/reading"
+          href={scopedUrl(READING_HOME)}
           className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]"
           aria-label={t("Back to collections")}
         >
@@ -621,7 +636,7 @@ export function ReadingWorkspacePage() {
                 onToggleBookmark={(locator, label) =>
                   void toggleBookmark(locator, label)
                 }
-                onClose={() => router.push("/reading")}
+                onClose={() => router.push(scopedUrl(READING_HOME))}
               />
             </div>
           )}

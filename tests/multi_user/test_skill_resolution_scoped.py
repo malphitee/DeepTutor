@@ -66,3 +66,28 @@ def test_admin_skip_grant_check(mu_isolated_root, as_user):
     with as_user("u_root", role="admin"):
         # Admin doesn't go through grant filtering at all.
         assert_skill_allowed("anything")
+
+
+def test_assigned_skills_follow_admin_system_workspace_move(
+    mu_isolated_root, as_user, make_user
+):
+    from deeptutor.multi_user.paths import user_context
+    from deeptutor.services.skill.service import get_admin_skill_service, get_skill_service
+    from deeptutor.services.workspace import ContentWorkspaceService
+
+    # Admin accounts share the canonical admin scope and system root.  Built
+    # through the same fixture as every other identity: a TokenPayload with an
+    # admin claim for an unknown account is rejected by design (stale-claim
+    # fail-closed), so tests must not mint admins through that boundary.
+    admin = make_user("account-admin", role="admin")
+    with user_context(admin):
+        skills = get_skill_service()
+        _write_skill(skills.root, "moved-skill", "Read the new location.")
+        service = ContentWorkspaceService()
+        target = mu_isolated_root / "moved-system"
+        with service.maintenance():
+            service.migrate_workspace(service._builtin_id("system"), str(target))
+        assert get_admin_skill_service().root == target / "skills"
+    _grant_skills("u_alice", ["moved-skill"])
+    with as_user("u_alice", role="user"):
+        assert "Read the new location." in assigned_skill_detail("moved-skill")["content"]

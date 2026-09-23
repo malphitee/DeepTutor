@@ -32,8 +32,8 @@ function MemoryL1PageInner() {
   // Deep-link contract — any footnote rendered in a memory doc links here:
   // ``?ref=notebook:3a563e6f`` or ``?surface=notebook&ref=3a563e6f``.
   const params = useSearchParams();
-  const rawRef = params.get("ref");
-  const rawSurface = params.get("surface");
+  const rawRef = params?.get("ref") ?? null;
+  const rawSurface = params?.get("surface") ?? null;
 
   let surface: Surface | undefined;
   let focusRef: string | undefined;

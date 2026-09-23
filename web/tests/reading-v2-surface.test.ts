@@ -93,7 +93,7 @@ test("reading is reachable only through its own workspace", () => {
 });
 
 test("reading reuses the workspace runtime without nesting another provider", () => {
-  const layout = source("app/(workspace)/reading/layout.tsx");
+  const layout = source("app/(workspace)/learning/reading/layout.tsx");
 
   assert.doesNotMatch(layout, /UnifiedChatProvider|ChatRuntimeProvider/);
   assert.match(layout, /QuizFollowupProvider/);
@@ -199,7 +199,7 @@ test("naming the first turn's conversation does not remount the reader", () => {
   const hook = source(`${WORKSPACE_DIR}/useReadingWorkspace.ts`);
   const page = source(`${WORKSPACE_DIR}/ReadingWorkspace.tsx`);
 
-  // `/reading/<ws>` and `/reading/<ws>/sessions/<id>` are different route
+  // `/learning/reading/<ws>` and `/learning/reading/<ws>/sessions/<id>` are different route
   // matches, so putting the new session id in the URL through the router is a
   // navigation: App Router tore the whole workspace down and rebuilt it while
   // the answer was still streaming — the reader's subtree left the DOM,
@@ -216,7 +216,8 @@ test("naming the first turn's conversation does not remount the reader", () => {
 
   // And the workspace has to read the URL the same way it wrote it: route
   // params do not follow the native history API, only the pathname does.
-  assert.match(page, /readingSessionIdFromPath\(usePathname\(\)\)/);
+  assert.match(page, /const pathname = usePathname\(\)/);
+  assert.match(page, /readingSessionIdFromPath\(pathname\)/);
   assert.doesNotMatch(page, /params\.sessionId/);
 });
 

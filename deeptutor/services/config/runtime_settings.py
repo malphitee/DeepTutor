@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from ipaddress import ip_address
 import json
 import os
 from pathlib import Path
@@ -84,6 +85,10 @@ DEFAULT_AUTH_SETTINGS: dict[str, Any] = {
     "password_hash": "",
     "token_expire_hours": 24,
     "cookie_secure": False,
+    # Exact socket-peer IPs the Next registration bridge may trust for XFF.
+    # Empty by default. The backend accepts only the bridge's authenticated
+    # peer proof, never unsigned XFF (including from loopback rewrites).
+    "registration_trusted_proxies": [],
 }
 
 DEFAULT_INTEGRATIONS_SETTINGS: dict[str, Any] = {
@@ -103,6 +108,25 @@ DEFAULT_INTEGRATIONS_SETTINGS: dict[str, Any] = {
         "stream_retention_seconds": 86_400,
     },
 }
+
+# Deployment-only integration overrides.  Docker images keep the rest of the
+# runtime configuration JSON-driven, but operators commonly provide broker
+# endpoints and credentials through their secret manager.  Keep this allowlist
+# narrow so an arbitrary host environment cannot silently replace auth, paths,
+# ports, or user-facing settings.
+INTEGRATION_PROCESS_OVERRIDE_KEYS = frozenset(
+    {
+        "POCKETBASE_URL",
+        "POCKETBASE_PORT",
+        "POCKETBASE_EXTERNAL_URL",
+        "POCKETBASE_ADMIN_EMAIL",
+        "POCKETBASE_ADMIN_PASSWORD",
+        "DEEPTUTOR_TURN_COORDINATION_BACKEND",
+        "DEEPTUTOR_REDIS_URL",
+        "DEEPTUTOR_REDIS_KEY_PREFIX",
+    }
+)
+INTEGRATION_PROCESS_OVERRIDE_SWITCH = "DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES"
 
 # Document parsing settings. The parse layer (deeptutor/services/parsing)
 # supports several pluggable engines; one is active at a time. The persisted
@@ -424,6 +448,23 @@ def _string(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _registration_trusted_proxies(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    addresses: list[str] = []
+    for raw in value[:32]:
+        try:
+            address = ip_address(str(raw).strip())
+        except ValueError:
+            continue
+        if "%" in str(address):
+            continue
+        normalized = str(getattr(address, "ipv4_mapped", None) or address)
+        if normalized not in addresses:
+            addresses.append(normalized)
+    return addresses
+
+
 def _string_or_list(value: Any) -> str | list[str]:
     if isinstance(value, list):
         return [item for raw in value if (item := _string(raw))]
@@ -715,7 +756,10 @@ class RuntimeSettingsService:
         return env
 
     def _process_env_value(self, key: str) -> str:
-        if self._ignore_process_overrides():
+        if self._ignore_process_overrides() and not (
+            key in INTEGRATION_PROCESS_OVERRIDE_KEYS
+            and _coerce_bool(self.process_env.get(INTEGRATION_PROCESS_OVERRIDE_SWITCH), False)
+        ):
             return ""
         value = self.process_env.get(key, "")
         if not value:
@@ -1210,6 +1254,9 @@ class RuntimeSettingsService:
             "password_hash": _string(settings.get("password_hash")),
             "token_expire_hours": max(1, _coerce_int(settings.get("token_expire_hours"), 24)),
             "cookie_secure": _coerce_bool(settings.get("cookie_secure"), False),
+            "registration_trusted_proxies": _registration_trusted_proxies(
+                settings.get("registration_trusted_proxies")
+            ),
         }
 
     def _normalize_integrations(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1256,6 +1303,15 @@ def _global_settings_dir() -> Path:
 
         return get_admin_path_service().get_settings_dir()
     except Exception:
+        # During an authenticated request a failed admin-scope resolution is
+        # an authorization/storage error.  Falling through to the ambient
+        # request PathService would make a malformed scope look like a valid
+        # settings root.  Keep the fallback only for startup and local CLI
+        # compatibility callers, which have no active request boundary.
+        from deeptutor.multi_user.context import request_scope_active
+
+        if request_scope_active():
+            raise
         return get_path_service().get_settings_dir()
 
 
@@ -1406,6 +1462,8 @@ __all__ = [
     "DEFAULT_GRAPHRAG_SETTINGS",
     "DEFAULT_IMA_SETTINGS",
     "DEFAULT_INTEGRATIONS_SETTINGS",
+    "INTEGRATION_PROCESS_OVERRIDE_KEYS",
+    "INTEGRATION_PROCESS_OVERRIDE_SWITCH",
     "DEFAULT_LIGHTRAG_SETTINGS",
     "DEFAULT_LIGHTRAG_SERVER_SETTINGS",
     "DEFAULT_LLAMAINDEX_SETTINGS",

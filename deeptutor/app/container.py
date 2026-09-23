@@ -136,6 +136,76 @@ class ApplicationContainer:
             await self.coordinator.close()
         self._started = False
 
+    async def revoke_user_turns(self, user_id: str, *, previous_role: str | None = None) -> None:
+        """Cancel active turns for one revoked account across this worker.
+
+        Local execution handles are cancelled directly.  A turn owned by a
+        different worker receives a coordinator cancel command only after the
+        target user's own store proves that the turn belongs to that account;
+        no global scan or cross-user session access is performed.
+        """
+
+        from deeptutor.multi_user.identity import get_user_by_id
+        from deeptutor.multi_user.models import CurrentUser
+        from deeptutor.multi_user.paths import scope_for_user, user_context
+
+        account = get_user_by_id(str(user_id))
+        if account is None:
+            # Deleted accounts no longer have an identity record.  Their local
+            # handles were already signalled by identity.delete_user; there is
+            # no safe store scope to inspect after deletion.
+            return
+        username, record = account
+        # The admin workspace is intentionally shared for compatibility and
+        # has no per-account turn boundary: turn rows record only the lease
+        # owner, so an admin-store scan cannot attribute turns to one account
+        # without cancelling every admin's work.  A role change may have
+        # already promoted a user before this cleanup runs, so use the
+        # pre-mutation role supplied by the caller and never scan the admin
+        # store here.  A demoted admin's in-process turns are still cancelled
+        # immediately by the revocation fan-out that ran before this method;
+        # only turns already leased by other workers in the shared store run
+        # to completion, bounded by their turn lifetime and revoked tokens.
+        role = str(previous_role or record.get("role") or "user")
+        if role != "user":
+            return
+        user = CurrentUser(
+            id=str(user_id),
+            username=username,
+            role=role,  # type: ignore[arg-type]
+            scope=scope_for_user(str(user_id), is_admin=role == "admin"),
+        )
+        with user_context(user):
+            store = self.store_provider.get()
+            runtime = self.runtime_registry.get(store)
+            try:
+                sessions = await store.list_sessions(limit=100_000, offset=0)
+            except Exception:
+                return
+            for session in sessions:
+                session_id = str(session.get("id") or session.get("session_id") or "")
+                if not session_id:
+                    continue
+                try:
+                    active = await store.list_active_turns(session_id)
+                except Exception:
+                    continue
+                for turn in active:
+                    turn_id = str(turn.get("id") or turn.get("turn_id") or "")
+                    if not turn_id:
+                        continue
+                    if await runtime.has_live_execution(turn_id):
+                        await runtime.cancel_turn(turn_id)
+                        continue
+                    lease = await self.coordinator.get_lease(turn_id)
+                    if lease is not None:
+                        await self.coordinator.submit_command(
+                            turn_id,
+                            "cancel",
+                            {},
+                            command_id=f"account-revoked:{user_id}:{turn_id}",
+                        )
+
     async def recover_once(self) -> None:
         """Recover expired turns across every registered user repository.
 
@@ -145,20 +215,46 @@ class ApplicationContainer:
         """
 
         from deeptutor.multi_user.paths import user_context
+        from deeptutor.services.workspace.activity import acquire_activity
+        from deeptutor.services.workspace.models import WorkspaceError
 
         seen: set[str] = set()
         for user in self._local_users():
             with user_context(user):
-                store = self.store_provider.get()
-                scope_key = store_scope(store).cache_key
-                if scope_key in seen:
+                try:
+                    activity = acquire_activity()
+                except WorkspaceError:
                     continue
-                seen.add(scope_key)
-                recovery = self._recovery_services.get(scope_key)
-                if recovery is None:
-                    recovery = TurnRecoveryService(self.coordinator, store)
-                    self._recovery_services[scope_key] = recovery
-                await recovery.recover_once()
+                try:
+                    await self._recover_user_workspaces(seen)
+                finally:
+                    activity.close()
+
+    async def _recover_user_workspaces(self, seen: set[str]) -> None:
+        from deeptutor.services.workspace import get_content_workspace_service
+        from deeptutor.services.workspace.context import workspace_context
+        from deeptutor.services.workspace.models import WorkspaceError
+
+        workspace_ids = [""] + [
+            row["workspace_id"]
+            for row in get_content_workspace_service()._catalog()
+            if row.get("kind") == "workspace" and os.path.isdir(row["path"])
+        ]
+        for workspace_id in workspace_ids:
+            try:
+                with workspace_context(workspace_id):
+                    store = self.store_provider.get()
+                    scope_key = store_scope(store).cache_key
+                    if scope_key in seen:
+                        continue
+                    seen.add(scope_key)
+                    recovery = self._recovery_services.get(scope_key)
+                    if recovery is None:
+                        recovery = TurnRecoveryService(self.coordinator, store)
+                        self._recovery_services[scope_key] = recovery
+                    await recovery.recover_once()
+            except WorkspaceError:
+                continue
 
     @staticmethod
     def _local_users() -> list[Any]:
@@ -238,7 +334,18 @@ class ApplicationContainer:
                 continue
             seen_users.add(user.id)
             with user_context(user):
-                migrated = await self.store_provider.get().migrate_workspace_preferences()
+                from deeptutor.services.workspace.activity import acquire_activity
+                from deeptutor.services.workspace.models import WorkspaceError
+
+                try:
+                    activity = acquire_activity()
+                except WorkspaceError as exc:
+                    reports.append({"user_id": user.id, "skipped": str(exc)})
+                    continue
+                try:
+                    migrated = await self.store_provider.get().migrate_workspace_preferences()
+                finally:
+                    activity.close()
             reports.append(
                 {
                     "user_id": user.id,
@@ -251,10 +358,29 @@ class ApplicationContainer:
     async def run_startup_data_migrations(self) -> dict[str, list[dict[str, Any]]]:
         """Run every idempotent migration shared by all server launch modes."""
 
-        return {
+        result = {
             "legacy_chat": await self.migrate_all_legacy_chats(),
             "workspace_preferences": await self.migrate_all_workspace_preferences(),
         }
+        from deeptutor.multi_user.paths import user_context
+        from deeptutor.services.workspace.session_move import migrate_legacy_bindings
+
+        reports = []
+        for user in self._local_users():
+            with user_context(user):
+                from deeptutor.services.workspace.models import WorkspaceError
+
+                try:
+                    reports.append(
+                        {
+                            "user_id": user.id,
+                            "migrated": await asyncio.to_thread(migrate_legacy_bindings),
+                        }
+                    )
+                except WorkspaceError as exc:
+                    reports.append({"user_id": user.id, "skipped": str(exc)})
+        result["workspace_data"] = reports
+        return result
 
     async def runtime_report(self) -> dict[str, Any]:
         report = self.settings.runtime_report()

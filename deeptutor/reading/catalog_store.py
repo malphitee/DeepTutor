@@ -46,8 +46,12 @@ class ReadingCatalogStore:
         if root is None:
             root = get_path_service().get_workspace_feature_dir("reading")
         self.root = Path(root)
+        if self.root.exists() and self.root.is_symlink():
+            raise ReadingError("reading catalog root cannot be a symbolic link")
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "_catalog.sqlite3"
+        if self.db_path.is_symlink():
+            raise ReadingError("reading catalog database cannot be a symbolic link")
         self._lock = threading.RLock()
         self._initialize()
 

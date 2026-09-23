@@ -166,10 +166,34 @@ class FileLibraryStore:
     # ------------------------------------------------------------------
 
     def _file_path(self, library_path: str) -> Path:
-        """Return the absolute Path for a relative library_path."""
-        return (self._root / library_path).resolve()
+        """Return a validated path below this user's library root.
+
+        The value normally comes from rows written by this process, but the
+        SQLite file is user data and may be restored or edited independently.
+        Validate it at every read/write boundary so ``..`` and symlinked
+        components cannot turn a library download or hard-delete into an
+        arbitrary filesystem operation.
+        """
+        if self._root.exists() and self._root.is_symlink():
+            raise ValueError("library root cannot be a symbolic link")
+        raw = Path(str(library_path or ""))
+        if raw.is_absolute() or not raw.parts or any(part in {"", ".", ".."} for part in raw.parts):
+            raise ValueError("library path must be relative")
+        cursor = self._root
+        for part in raw.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("library path cannot contain symbolic links")
+        candidate = cursor.resolve()
+        try:
+            candidate.relative_to(self._root.resolve())
+        except ValueError as exc:
+            raise ValueError("library path leaves the user's library root") from exc
+        return candidate
 
     def _ensure_root(self) -> None:
+        if self._root.exists() and self._root.is_symlink():
+            raise ValueError("library root cannot be a symbolic link")
         self._root.mkdir(parents=True, exist_ok=True)
 
     def _write_file(self, library_path: str, data: bytes) -> None:
@@ -189,7 +213,11 @@ class FileLibraryStore:
                     pass
 
     def _delete_file(self, library_path: str) -> None:
-        target = self._file_path(library_path)
+        try:
+            target = self._file_path(library_path)
+        except ValueError as exc:
+            logger.warning("refusing to delete unsafe library path %r: %s", library_path, exc)
+            return
         if target.exists():
             try:
                 target.unlink()
@@ -421,7 +449,11 @@ class FileLibraryStore:
             ).fetchone()
             if row is None:
                 return None
-            path = self._file_path(row["library_path"])
+            try:
+                path = self._file_path(row["library_path"])
+            except ValueError:
+                logger.warning("ignoring unsafe library path for file %s", file_id)
+                return None
             if not path.is_file():
                 return None
             return path
@@ -464,13 +496,18 @@ def get_file_library_store() -> FileLibraryStore:
     constant key here would pin every user to whichever user's request
     happened to populate the cache first.
     """
-    user_root = get_path_service().get_user_root()
+    path_service = get_path_service()
+    user_root = path_service.get_user_root()
     key = str(user_root)
     if key not in _instances:
-        db_dir = user_root.joinpath(*_LIBRARY_DB_SUBDIR)
+        db_dir = path_service.scoped_path(
+            user_root.joinpath(*_LIBRARY_DB_SUBDIR), "file library root"
+        )
         db_dir.mkdir(parents=True, exist_ok=True)
         db_path = db_dir / "library.db"
-        root = user_root.joinpath(*_LIBRARY_FILES_SUBDIR).resolve()
+        root = path_service.scoped_path(
+            user_root.joinpath(*_LIBRARY_FILES_SUBDIR), "file library root"
+        )
         _instances[key] = FileLibraryStore(db_path=db_path, root=root)
     return _instances[key]
 

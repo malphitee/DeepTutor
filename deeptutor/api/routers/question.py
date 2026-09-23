@@ -386,9 +386,24 @@ async def websocket_question_generate(websocket: WebSocket):
                 pass
             return
 
-        # Generate task ID
-        task_key = f"question_{kb_name}_{hash(str(requirement))}"
-        task_id = task_manager.generate_task_id("question_gen", task_key)
+        # Generate a tenant-qualified task ID.  The requirement text and KB
+        # name are user-controlled and can be identical across accounts; both
+        # the mapping key and metadata therefore carry the authenticated
+        # owner/scope.
+        from deeptutor.multi_user.context import get_current_user
+
+        current_user = get_current_user()
+        path_service = get_path_service()
+        scope_key = str(path_service.workspace_root.resolve())
+        task_key = (
+            f"question_{current_user.id}_{scope_key}_{kb_name}_{hash(str(requirement))}"
+        )
+        task_id = task_manager.generate_task_id(
+            "question_gen",
+            task_key,
+            owner_id=current_user.id,
+            scope_key=scope_key,
+        )
 
         # Send task ID to frontend
         try:
@@ -402,7 +417,6 @@ async def websocket_question_generate(websocket: WebSocket):
         )
 
         # 2. Initialize Coordinator
-        path_service = get_path_service()
         output_base = path_service.get_question_batch_dir(task_id)
 
         try:

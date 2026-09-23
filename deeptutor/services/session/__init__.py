@@ -4,6 +4,7 @@ from .protocol import SessionStoreProtocol
 from .sqlite_store import (
     SQLiteSessionStore,
     get_sqlite_session_store,
+    get_sqlite_session_store_for,
     make_imported_session_id,
 )
 from .turn_runtime import TurnRuntimeManager, get_turn_runtime_manager
@@ -22,6 +23,9 @@ def get_session_store() -> SessionStoreProtocol:
     from deeptutor.services.pocketbase_client import is_pocketbase_enabled
 
     if is_pocketbase_enabled():
+        from deeptutor.services.auth import assert_supported_backend
+
+        assert_supported_backend()
         from deeptutor.services.config import load_integrations_settings
 
         from .pocketbase_store import PocketBaseSessionStore
@@ -43,6 +47,7 @@ __all__ = [
     "TurnRuntimeManager",
     "get_session_store",
     "get_sqlite_session_store",
+    "get_sqlite_session_store_for",
     "get_turn_runtime_manager",
     "make_imported_session_id",
 ]

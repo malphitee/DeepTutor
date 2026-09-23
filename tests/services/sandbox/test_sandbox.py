@@ -328,6 +328,28 @@ async def test_service_runs_with_subprocess() -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_denies_when_exec_policy_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken grant lookup cannot become permission to run a command."""
+    from deeptutor.multi_user import tool_access
+
+    def _broken_policy():
+        raise OSError("grant store unavailable")
+
+    monkeypatch.setattr(tool_access, "exec_override", _broken_policy)
+    svc = SandboxService(SandboxSettings(allow_subprocess=True))
+    svc._backend = RestrictedSubprocessBackend()
+    svc._healthy = True
+
+    result = await svc.run(ExecRequest(command="echo should-not-run"), user_id="u1")
+
+    assert not result.ok
+    assert "should-not-run" not in result.stdout
+    assert result.error
+
+
+@pytest.mark.asyncio
 async def test_quota_rate_limit() -> None:
     quota = UserExecQuota(max_concurrent=5, max_per_minute=2)
     async with await quota.acquire("u1"):

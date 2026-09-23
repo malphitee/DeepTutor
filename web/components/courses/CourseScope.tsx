@@ -48,7 +48,7 @@ export interface CourseScope {
 
 /** Read `?course=<id>` and resolve it. Returns null when the URL carries none. */
 export function useCourseScope(): CourseScope | null {
-  const courseId = useSearchParams().get("course")?.trim() ?? "";
+  const courseId = useSearchParams()?.get("course")?.trim() ?? "";
   const [course, setCourse] = useState<StudyCourse | null>(null);
   // Re-read after an attach so a second creation in the same visit sees the
   // first one already in the course.
@@ -131,7 +131,7 @@ export function CourseScopeChip({ scope }: { scope: CourseScope }) {
       </Link>
       <button
         type="button"
-        onClick={() => router.replace(pathname)}
+        onClick={() => { if (pathname) router.replace(pathname); }}
         aria-label={t("Show every course")}
         className="rounded-full p-0.5 transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
       >

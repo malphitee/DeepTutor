@@ -72,11 +72,23 @@ services:
       # tokens), data/users, data/partners and data/cli-apps in the container's
       # writable layer — discarded on every recreate. Upgrading from that
       # layout needs a one-time copy out of the running container first; see
-      # CONTAINERIZATION.md → "One-time migration".
+      # docs-for-user/CONTAINERIZATION.md → "One-time migration".
       - ./data:/app/data
       - "${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}:/workspace"
 
     environment:
+      # Integration endpoints may come from the deployment environment.  The
+      # image keeps all other runtime settings JSON-driven; only these
+      # explicitly listed middleware variables are forwarded.
+      - DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES=${DEEPTUTOR_ALLOW_INTEGRATION_ENV_OVERRIDES:-1}
+      - DEEPTUTOR_TURN_COORDINATION_BACKEND=${DEEPTUTOR_TURN_COORDINATION_BACKEND:-}
+      - DEEPTUTOR_REDIS_URL=${DEEPTUTOR_REDIS_URL:-}
+      - DEEPTUTOR_REDIS_KEY_PREFIX=${DEEPTUTOR_REDIS_KEY_PREFIX:-}
+      - POCKETBASE_URL=${POCKETBASE_URL:-}
+      - POCKETBASE_PORT=${POCKETBASE_PORT:-}
+      - POCKETBASE_EXTERNAL_URL=${POCKETBASE_EXTERNAL_URL:-}
+      - POCKETBASE_ADMIN_EMAIL=${POCKETBASE_ADMIN_EMAIL:-}
+      - POCKETBASE_ADMIN_PASSWORD=${POCKETBASE_ADMIN_PASSWORD:-}
       - DEEPTUTOR_WORKSPACE_ROOT=/workspace
       - DEEPTUTOR_WORKSPACE_ALLOWED_ROOTS=/workspace
 

@@ -39,6 +39,11 @@ class MathAnimatorCapability(TurnCapability):
     )
 
     async def run(self, context: UnifiedContext, stream: StreamBus) -> None:
+        from deeptutor.multi_user.execution_access import assert_capability_execution_allowed
+
+        # This capability eventually invokes Manim through a direct
+        # subprocess, outside the ordinary exec tool policy.
+        assert_capability_execution_allowed(self.name)
         if importlib.util.find_spec("manim") is None:
             raise RuntimeError(
                 "math_animator requires optional dependencies. "
