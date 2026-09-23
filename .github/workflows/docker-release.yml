@@ -132,8 +132,18 @@ jobs:
           # No public tags until both architectures have reached both registries.
           outputs: type=image,"name=${{ env.GHCR_IMAGE }},${{ env.CNB_IMAGE }}",push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=deeptutor-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=deeptutor-${{ matrix.arch }}
+          # GHA caches are scoped to Git refs: a new release tag cannot read
+          # the dependency layers populated on dev or a previous release tag.
+          # Import both channels from GHCR, with legacy GHA caches as a fallback.
+          cache-from: |
+            type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-test-${{ matrix.arch }}
+            type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-production-${{ matrix.arch }}
+            type=gha,scope=deeptutor-${{ matrix.arch }}
+          # Separate writers by channel and architecture so concurrent dev /
+          # release builds cannot replace each other's cache. mode=max includes
+          # the npm and Python builder stages, not only the final runtime image.
+          # Cache export is best-effort; publishing the actual images is not.
+          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-${{ needs.validate-release-tag.outputs.channel }}-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Record published digest
         shell: python
