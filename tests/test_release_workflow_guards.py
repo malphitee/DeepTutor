@@ -92,7 +92,7 @@ def test_publication_events_are_guarded(publication: str) -> None:
         assert validator["if"] == (
             "github.repository == 'malphitee/DeepTutor' && "
             "github.event_name == 'push' && !github.event.deleted && "
-            "(github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))"
+            "startsWith(github.ref, 'refs/tags/v')"
         )
     else:
         assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
@@ -165,14 +165,6 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     assert metadata["with"]["flavor"] == "latest=false"
 
 
-def test_dev_push_selects_test_channel_without_latest(tmp_path: Path):
-    result = _run_validator("docker", "", tmp_path, ref="refs/heads/dev")
-    assert result.returncode == 0, result.stderr
-    assert (tmp_path / "docker-output.txt").read_text() == (
-        "image_tag=dev\nis_stable=false\nchannel=test\n"
-    )
-
-
 @pytest.mark.parametrize(
     ("tag", "image_tag", "stable"),
     [
@@ -201,6 +193,7 @@ def test_version_push_selects_production_and_only_plain_versions_are_stable(
         ("push", "refs/heads/dev-copy", False),
         ("push", "refs/tags/dev", False),
         ("push", "refs/tags/1.2.3", False),
+        ("push", "refs/heads/dev", False),
         ("push", "refs/heads/dev", True),
         ("push", "refs/tags/v1.2.3", True),
         ("release", "refs/tags/v1.2.3", False),
@@ -219,14 +212,13 @@ def test_docker_publishes_one_build_to_both_owned_registries():
     document, publish_job_name = _workflow("docker")
     # PyYAML follows YAML 1.1, where the Actions key `on` is parsed as True.
     triggers = document[True]
-    assert triggers == {"push": {"branches": ["dev"], "tags": ["v*"]}}
+    assert triggers == {"push": {"tags": ["v*"]}}
     assert document["permissions"]["packages"] == "write"
     assert document["concurrency"]["cancel-in-progress"] is False
-    assert document["concurrency"]["group"] == (
-        "docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}"
-    )
+    assert document["concurrency"]["group"] == "docker-images-production"
     assert document["env"]["GHCR_IMAGE"] == "ghcr.io/malphitee/deeptutor"
     assert document["env"]["CNB_IMAGE"] == "docker.cnb.cool/johnnliu/deeptutor"
+    assert document["env"]["RELEASE_BRANCH"] == "main"
 
     steps = document["jobs"][publish_job_name]["steps"]
     logins = {
@@ -242,8 +234,6 @@ def test_docker_publishes_one_build_to_both_owned_registries():
     assert metadata["images"].splitlines() == ["${{ env.GHCR_IMAGE }}", "${{ env.CNB_IMAGE }}"]
     assert metadata["tags"].splitlines() == [
         "type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}",
-        "type=sha,format=short,prefix=dev-,enable=${{ "
-        "needs.validate-release-tag.outputs.channel == 'test' }}",
         "type=raw,value=latest,enable=${{ "
         "needs.validate-release-tag.outputs.channel == 'production' && "
         "needs.validate-release-tag.outputs.is_stable == 'true' }}",
@@ -300,8 +290,8 @@ def test_native_architecture_builds_only_publish_tags_after_both_succeed():
     assert publisher["env"]["IMAGE_TAG"] == "${{ needs.validate-release-tag.outputs.image_tag }}"
 
 
-def test_registry_cache_is_shared_across_refs_without_overwriting_other_builds():
-    """New version tags must see dev's dependency cache despite GHA ref isolation."""
+def test_registry_cache_is_shared_across_release_tags():
+    """New version tags must reuse the shared production dependency cache."""
     document, _ = _workflow("docker")
     build = document["jobs"]["build-and-push"]
     builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
@@ -318,33 +308,29 @@ def test_registry_cache_is_shared_across_refs_without_overwriting_other_builds()
         assert "${{" not in value
         return [dict(part.split("=", 1) for part in line.split(",")) for line in value.splitlines()]
 
-    writers: dict[tuple[str, str], str] = {}
-    readers: dict[tuple[str, str], set[str]] = {}
+    writers: dict[str, str] = {}
+    readers: dict[str, set[str]] = {}
     for platform in build["strategy"]["matrix"]["include"]:
         arch = platform["arch"]
-        for channel in ("test", "production"):
-            exports = cache_entries(builder["cache-to"], arch, channel)
-            assert len(exports) == 1
-            export = exports[0]
-            assert export["type"] == "registry"
-            assert export["mode"] == "max"
-            assert export["ignore-error"] == "true"
-            assert export["image-manifest"] == export["oci-mediatypes"] == "true"
-            assert export["ref"].startswith(f"{image}:buildcache-")
-            writers[(arch, channel)] = export["ref"]
+        exports = cache_entries(builder["cache-to"], arch, "production")
+        assert len(exports) == 1
+        export = exports[0]
+        assert export["type"] == "registry"
+        assert export["mode"] == "max"
+        assert export["ignore-error"] == "true"
+        assert export["image-manifest"] == export["oci-mediatypes"] == "true"
+        assert export["ref"] == f"{image}:buildcache-production-{arch}"
+        writers[arch] = export["ref"]
 
-            imports = cache_entries(builder["cache-from"], arch, channel)
-            readers[(arch, channel)] = {
-                entry["ref"] for entry in imports if entry["type"] == "registry"
-            }
-            assert {entry["scope"] for entry in imports if entry["type"] == "gha"} == {
-                f"deeptutor-{arch}"
-            }
+        imports = cache_entries(builder["cache-from"], arch, "production")
+        readers[arch] = {entry["ref"] for entry in imports if entry["type"] == "registry"}
+        assert readers[arch] == {writers[arch]}
+        assert {entry["scope"] for entry in imports if entry["type"] == "gha"} == {
+            f"deeptutor-{arch}"
+        }
 
-    assert len(set(writers.values())) == len(writers) == 4
-    for (arch, channel), sources in readers.items():
-        assert sources == {writers[(arch, "test")], writers[(arch, "production")]}
-        assert writers[(arch, channel)] in sources
+    assert len(set(writers.values())) == len(writers) == 2
+    assert all(sources == {writers[arch]} for arch, sources in readers.items())
     assert "ignore-error" not in builder["outputs"]
 
 
@@ -354,11 +340,16 @@ def test_docker_validates_checked_out_application_version_before_building():
     checkout_index = next(
         i for i, step in enumerate(steps) if step.get("uses", "").startswith("actions/checkout@")
     )
+    checkout = steps[checkout_index]
+    assert checkout["with"]["fetch-depth"] == 0
+    verify = next(
+        step for step in steps if step.get("name") == "Verify version tag is contained in main"
+    )
+    assert 'git merge-base --is-ancestor "$GITHUB_SHA" "origin/$RELEASE_BRANCH"' in verify["run"]
     validate_index = next(i for i, step in enumerate(steps) if step.get("id") == "validate")
-    assert checkout_index < validate_index
+    assert checkout_index < steps.index(verify) < validate_index
     assert steps[validate_index]["run"] == "python scripts/validate_image_release.py"
     parser = next(step for step in steps if step.get("name") == "Install version parser")
-    assert parser["if"] == "startsWith(github.ref, 'refs/tags/')"
     assert parser["run"] == "python -m pip install packaging==25.0"
 
 
