@@ -23,6 +23,9 @@ bootstrap 管理员）、`test_registration_invite_only.py`（首注册提升）
 `tests/api/test_auth_contextvar.py`（过期 admin claim fail-closed、PB 模式
 role 保留）。启动隔离模式声明：`tests/multi_user/test_isolation_mode.py`。
 
+邀请码注册新增覆盖见 §2.1；完整选择与验收记录见
+[邀请码注册实现记录](invite-registration-implementation.md) 和 [ADR-0005](adr/0005-invite-code-registration.md)。
+
 ## 2. 计划 §6 验收场景 → 现状
 
 | 场景 | 状态 | 证据 |
@@ -38,6 +41,36 @@ role 保留）。启动隔离模式声明：`tests/multi_user/test_isolation_mod
 | 账号禁用后旧 token 不能新建请求/turn | ✅ | `test_disabled_or_deleted_user_cannot_reuse_old_token`、`test_role_demotion_cancels_in_process_turn_tasks` |
 | 普通用户 exec 默认拒绝 | ✅ | 不变量 8 所列 |
 
+### 2.1 邀请码准入注册（2026-09-23）
+
+以下为代码中已有的测试覆盖；“有测试”与“最终完整回归/真实部署验收已通过”分别记录。
+
+| 场景 | 覆盖测试 |
+| --- | --- |
+| 可读空用户库且无配置管理员才允许无码首注册；并发只能产生一个首管理员 | `tests/multi_user/test_invite_store.py::test_bootstrap_is_atomic_and_code_free`、`test_configured_admin_requires_code_and_name_stays_reserved`；`tests/api/test_invite_registration.py` 首注册/bootstrap overlay HTTP 用例 |
+| 损坏/不可读用户库、邀请码库、事务日志不得重新开放 bootstrap 或被静默覆盖 | `test_invite_store.py::test_damaged_users_never_reopen_bootstrap`、`test_unreadable_users_fail_closed`、`test_damaged_invites_are_not_replaced`、`test_corrupt_journal_fails_closed`；API 的 corrupt-store 503 用例 |
+| 后续无码/错误/过期/耗尽/撤销统一拒绝；有效码后才检查用户名冲突，不扣次数 | `test_invite_store.py::test_expiry_revocation_and_exhaustion_have_same_error`、`test_conflict_does_not_consume_and_deletion_does_not_refund`；API 对应状态码与计次断言 |
+| 用户创建与兑换不超额，并发管理员直建同名不能覆盖 | `test_invite_store.py::test_parallel_redemptions_never_exceed_capacity`、`test_admin_create_and_invite_registration_share_uniqueness_lock`、`test_create_only_cannot_overwrite_existing_user` |
+| journal 提交前失败不写两库；提交后中断/清理失败/新进程启动向前恢复且只扣一次 | `test_invite_store.py::test_failure_before_journal_commit_changes_neither_store`、`test_journal_recovers_after_interruption_between_store_writes`、`test_committed_journal_recovers_in_a_fresh_process`、`test_journal_cleanup_failure_rolls_forward_only_once`、`test_journal_checksum_blocks_corrupt_snapshot_replay` |
+| bcrypt 前预检不能代替最终锁内复验；撤销与兑换有唯一串行顺序 | `test_invite_store.py::test_preflight_is_advisory_and_final_redemption_rechecks`、`test_revoke_and_redeem_have_one_serial_order` |
+| 仅管理员可生成/分页查看/撤销；普通注册不能指定 role/preset；auth disabled/PB 不可用 | `tests/api/test_invite_registration.py` 真实 JWT 与 `require_admin` HTTP 用例；不通过 override 绕过管理员依赖 |
+| 一次性明文、列表/审计不含明文或 hash、归一化输入、生成边界与分页 | `test_invite_store.py::test_code_defaults_private_storage_and_public_views`、`test_normalization_and_permanent_invite`、`test_pagination_and_batched_creation`；API 脱敏/边界用例 |
+| 第 10 次无效邀请码返回 429，冷却 900 秒，成功清桶、过期清理、满表不驱逐锁定 IP | `tests/multi_user/test_registration_limits.py`；API 冷却恢复与成功清桶用例 |
+| 真实客户端地址证明、伪造/过期/修改请求体的证明无效，独立密钥权限与稳定性 | `test_registration_limits.py` 的 proof/secret 用例；`web/tests/registration-proxy.test.ts`；后端永不采用未签名 XFF |
+| 多 worker 启动被拒绝、桥接密钥只在合适模式创建、可信代理仅保存有界精确 IP | `tests/multi_user/test_registration_startup.py`、`tests/services/config/test_runtime_settings.py`；新增 11 项已包含在本轮后端组合中 |
+| 注册状态/邀请码输入/错误与冷却、注册后跳登录；用户/邀请码两 tab；一次性展示与撤销交互 | `web/tests/auth-registration.spec.ts`、`invite-registration.spec.tsx`、`invite-manager.spec.tsx`、`admin-invite-tabs.spec.tsx` |
+| Pages API 共存时导航 hooks 暂时为 null，深链/回调应等路由就绪后处理 | `web/tests/navigation-compat.spec.tsx`、`navigation-ready-components.spec.tsx`，共新增 5 项 |
+
+本轮同命令后端组合 **401 passed、3 warnings、38.73 秒**；完整前端 Node **1189 passed**，
+完整 Vitest **83 文件/323 passed/0 unhandled errors**；typecheck、contracts、架构、i18n、
+lint、Ruff 与独立目录生产构建通过。lint 有 49 条既有 warning、0 error。
+实际范围与命令见 [实现记录的验证表](invite-registration-implementation.md#验证记录)，未运行
+全仓库 pytest 或完整 `npm run check`。真实 Chrome/Next/FastAPI 隔离环境验收与 API 重启
+持久化检查已通过；可信反代来源 IP 由本机临时配置模拟，未据此声称外部反代部署通过。
+
+设备 heartbeat 既有回归测试已固定从当天 UTC 中午开始，避免午夜前五分钟运行时意外跨日；
+保留显式日切测试。这是测试时钟稳定性修复，不是生产 heartbeat 行为变化。
+
 ## 3. 已知缺口
 
 | # | 缺口 | 说明 |
@@ -48,6 +81,7 @@ role 保留）。启动隔离模式声明：`tests/multi_user/test_isolation_mod
 | ~~G4~~ | 跨模块私有调用公开化 | **已关闭**（commit 489688e2）：`terminate_revoked_user`、`PathService.scoped_path`、`KnowledgeManager.reload_config`、`safe_memory_child` 已公开化并迁移全部调用方 |
 | G5 | 上游同步回归矩阵（阶段 7） | 2026-09-21 同步 upstream/main（33 提交）时执行过一轮：§2 全表通过；冲突解法与 ADR 恢复见 git log。每次 Sync fork 后重复 |
 | G6 | 本地沙箱测试环境差异 | `test_runner_server_executes_and_truncates_output` 依赖 PATH 上的 `python` 命令：CI/激活的 venv 可通过，直接调用 `.venv/bin/python -m pytest` 会 127。属本地运行方式问题，非代码缺陷 |
+| G7 | 邀请码注册外部部署验收 | 后端 401 项、完整 Node/Vitest、生产构建、真实 Chrome + Next + 完整 FastAPI 本机隔离环境和重启持久化验收均通过。Docker 与真实外部反向代理链仍待验收，不能关闭 G1/G3 既有缺口；详见 `invite-registration-implementation.md` |
 
 ## 4. 维护约定
 

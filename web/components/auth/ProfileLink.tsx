@@ -12,7 +12,7 @@ interface ProfileLinkProps {
 }
 
 export function ProfileLink({ collapsed = false }: ProfileLinkProps) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const { t } = useTranslation();
   const [status, setStatus] = useState<AuthStatus | null>(null);
 

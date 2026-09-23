@@ -216,7 +216,8 @@ test("naming the first turn's conversation does not remount the reader", () => {
 
   // And the workspace has to read the URL the same way it wrote it: route
   // params do not follow the native history API, only the pathname does.
-  assert.match(page, /readingSessionIdFromPath\(usePathname\(\)\)/);
+  assert.match(page, /const pathname = usePathname\(\)/);
+  assert.match(page, /readingSessionIdFromPath\(pathname\)/);
   assert.doesNotMatch(page, /params\.sessionId/);
 });
 

@@ -16,7 +16,7 @@ module.exports = {
       name: "shared-does-not-depend-up",
       severity: "error",
       from: { path: "^shared/" },
-      to: { path: "^(app|components|context|features)/" },
+      to: { path: "^(app|pages|components|context|features)/" },
     },
     {
       name: "feature-domain-does-not-render",
@@ -25,13 +25,13 @@ module.exports = {
         path: "^features/[^/]+/(model|store|transport)/",
         pathNot: "^features/settings/store/SettingsStore\\.tsx$",
       },
-      to: { path: "^(app|components|context)/" },
+      to: { path: "^(app|pages|components|context)/" },
     },
     {
       name: "lib-does-not-depend-on-ui",
       severity: "error",
       from: { path: "^lib/" },
-      to: { path: "^(app|components|context)/" },
+      to: { path: "^(app|pages|components|context)/" },
     },
     {
       name: "no-route-page-imports",

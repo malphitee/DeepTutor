@@ -14,7 +14,7 @@ function LoginPageContent() {
   const { t } = useTranslation();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = normalizeInternalReturnPath(searchParams.get("next"));
+  const next = normalizeInternalReturnPath(searchParams?.get("next"));
   const resolvedNext = useCallback(
     () =>
       inheritLoginHash(
@@ -24,7 +24,8 @@ function LoginPageContent() {
     [next],
   );
 
-  const registered = searchParams.get("registered") === "1";
+  const registered = searchParams?.get("registered") === "1";
+  const invited = registered && searchParams?.get("invite") === "1";
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -32,6 +33,7 @@ function LoginPageContent() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (searchParams === null) return;
     // If already authenticated, skip login
     fetchAuthStatus().then((status) => {
       if (status?.authenticated) {
@@ -43,10 +45,11 @@ function LoginPageContent() {
         if (first) router.replace("/register");
       });
     });
-  }, [router, resolvedNext]);
+  }, [router, resolvedNext, searchParams]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (searchParams === null) return;
     setError("");
     setLoading(true);
 
@@ -76,6 +79,13 @@ function LoginPageContent() {
       {registered && (
         <div className="mb-4 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-600 dark:text-green-400">
           {t("Account created! Sign in to continue.")}
+          {invited && (
+            <p className="mt-2">
+              {t(
+                "Your account will use the Standard preset. After signing in, configure your own model or ask an administrator to grant access.",
+              )}
+            </p>
+          )}
         </div>
       )}
 
@@ -140,7 +150,7 @@ function LoginPageContent() {
           {/* Submit */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || searchParams === null}
             className="w-full py-2.5 px-4 rounded-lg font-medium text-sm
                        bg-[var(--primary)] text-[var(--primary-foreground)]
                        hover:opacity-90 active:opacity-80

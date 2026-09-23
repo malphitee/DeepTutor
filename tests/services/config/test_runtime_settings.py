@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from deeptutor.services.config.model_catalog import SERVICE_NAMES
 from deeptutor.services.config.runtime_settings import (
     RuntimeSettingsService,
@@ -58,10 +60,63 @@ def test_runtime_settings_creates_defaults_without_reading_dotenv(tmp_path: Path
     assert service.load_system(include_process_overrides=False)["backend_port"] == 8001
     assert service.load_system(include_process_overrides=False)["version_check_enabled"] is True
     assert service.load_auth(include_process_overrides=False)["enabled"] is False
+    assert service.load_auth(include_process_overrides=False)["registration_trusted_proxies"] == []
     assert service.load_integrations(include_process_overrides=False)["pocketbase_url"] == ""
 
     assert _read_json(service.path_for("system"))["backend_port"] == 8001
     assert _read_json(service.path_for("auth"))["enabled"] is False
+    assert _read_json(service.path_for("auth"))["registration_trusted_proxies"] == []
+
+
+def test_registration_proxy_trust_roundtrips_only_canonical_exact_ips(tmp_path: Path) -> None:
+    service = RuntimeSettingsService(tmp_path / "settings", process_env={})
+    saved = service.save_auth(
+        {
+            "registration_trusted_proxies": [
+                " 127.0.0.1 ",
+                "::ffff:127.0.0.1",
+                "2001:0DB8:0:0::1",
+                "2001:db8::1",
+                "192.0.2.10",
+                "*",
+                "192.0.2.0/24",
+                "localhost",
+                "fe80::1%eth0",
+                "[::1]",
+                "127.0.0.1:8001",
+                None,
+                2130706433,
+            ]
+        }
+    )
+    expected = ["127.0.0.1", "2001:db8::1", "192.0.2.10"]
+
+    assert saved["registration_trusted_proxies"] == expected
+    # The Next bridge reads this JSON directly, so persist the same canonical
+    # addresses that the Python settings service returns.
+    assert _read_json(service.path_for("auth"))["registration_trusted_proxies"] == expected
+    assert service.load_auth()["registration_trusted_proxies"] == expected
+
+
+@pytest.mark.parametrize("raw", [None, "127.0.0.1", {"127.0.0.1": True}, True])
+def test_malformed_registration_proxy_trust_grants_no_trust(tmp_path: Path, raw) -> None:
+    service = RuntimeSettingsService(tmp_path / "settings", process_env={})
+    service.settings_dir.mkdir(parents=True)
+    service.path_for("auth").write_text(
+        json.dumps({"registration_trusted_proxies": raw}), encoding="utf-8"
+    )
+
+    assert service.load_auth()["registration_trusted_proxies"] == []
+
+
+def test_registration_proxy_trust_does_not_accept_entries_beyond_limit(tmp_path: Path) -> None:
+    service = RuntimeSettingsService(tmp_path / "settings", process_env={})
+    addresses = [f"192.0.2.{index}" for index in range(1, 34)]
+
+    saved = service.save_auth({"registration_trusted_proxies": addresses})
+
+    assert saved["registration_trusted_proxies"] == addresses[:32]
+    assert _read_json(service.path_for("auth"))["registration_trusted_proxies"] == addresses[:32]
 
 
 def test_capability_routing_defaults_to_disabled(tmp_path) -> None:

@@ -89,7 +89,7 @@ export function SidebarNav({
   onHomeClick,
   onNavigate,
 }: SidebarNavProps) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const { t } = useTranslation();
   const { has } = useCapabilityAccess();
 
@@ -523,7 +523,7 @@ export function SidebarHome({
   onHomeClick: (event: React.MouseEvent) => void;
 }) {
   const { t } = useTranslation();
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const { has } = useCapabilityAccess();
   const entry = NAV_BY_HREF.get("/chat")!;
   const active = isNavActive(pathname, entry.href);

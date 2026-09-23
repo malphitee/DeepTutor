@@ -19,16 +19,20 @@ import { PracticeInsights } from "./PracticeInsights";
 /** Shared collections and imports; the library surface omits practice-only tools. */
 export function PracticePage({ mode = "practice" }: { mode?: "practice" | "library" }) {
   const search = useSearchParams();
+  if (!search) return null;
   if (mode === "practice" && !search.has("course") && !search.has("question")) return <ReviewHome />;
-  return <ScopedPracticePage mode={mode} initialImport={search.get("create") === "1"} />;
+  return <ScopedPracticePage mode={mode} initialImport={search.get("create") === "1"} search={search} />;
 }
 
-function ScopedPracticePage({ mode, initialImport }: { mode: "practice" | "library"; initialImport: boolean }) {
+function ScopedPracticePage({ mode, initialImport, search }: {
+  mode: "practice" | "library";
+  initialImport: boolean;
+  search: NonNullable<ReturnType<typeof useSearchParams>>;
+}) {
   const { t } = useTranslation();
   const libraryOnly = mode === "library";
   const pageRoute = libraryOnly ? questionBankRoute : practiceRoute;
   const router = useRouter();
-  const search = useSearchParams();
   const courseId = search.get("course")?.trim() || "";
   const tab = search.get("view") === "mistakes" ? "mistakes" : "bank";
   const [summary, setSummary] = useState<PracticeSummary | null>(null);

@@ -259,7 +259,7 @@ export default function ChatWorkspace({
 }) {
   const { router, sessionId: sessionIdParam } = useChatRouteSession();
   const searchParams = useSearchParams();
-  const requestedWorkspaceId = searchParams.get("dt_workspace") ?? searchParams.get("workspace") ?? null;
+  const requestedWorkspaceId = searchParams?.get("dt_workspace") ?? searchParams?.get("workspace") ?? null;
   const { t } = useTranslation();
   const {
     capabilities,
@@ -2378,7 +2378,7 @@ export default function ChatWorkspace({
             (!sessionIdParam || state.sessionId === sessionIdParam) && (
               <WatchingSessionBridge
                 sessionKey={state.sessionId || "draft"}
-                sourceUrl={!sessionIdParam ? searchParams.get("video") : null}
+                sourceUrl={!sessionIdParam ? searchParams?.get("video") ?? null : null}
                 materialId={state.timedMediaId}
                 onMaterial={configureSession}
               />

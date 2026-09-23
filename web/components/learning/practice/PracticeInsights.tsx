@@ -32,11 +32,11 @@ export function PracticeInsights({ courseId, revision, workspaceId }: { courseId
   const { t } = useTranslation();
   const search = useSearchParams();
   const router = useRouter();
-  const days = [7, 30, 90].includes(Number(search.get("stats_days")))
-    ? Number(search.get("stats_days"))
+  const days = [7, 30, 90].includes(Number(search?.get("stats_days")))
+    ? Number(search?.get("stats_days"))
     : 30;
-  const metric = METRICS.find(item => item.key === search.get("stats_metric")) || METRICS[0];
-  const style = search.get("stats_chart") === "bars" ? "bars" : "line";
+  const metric = METRICS.find(item => item.key === search?.get("stats_metric")) || METRICS[0];
+  const style = search?.get("stats_chart") === "bars" ? "bars" : "line";
   const [result, setResult] = useState<{ scope: string; data: PracticeAnalytics } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -44,6 +44,7 @@ export function PracticeInsights({ courseId, revision, workspaceId }: { courseId
   const scope = `${workspaceId}:${courseId}:${days}`;
   const data = result?.scope === scope ? result.data : null;
   function setView(key: string, value: string) {
+    if (!search) return;
     const query = new URLSearchParams(search.toString());
     query.set(key, value);
     router.replace(practiceRoute(query), { scroll: false });

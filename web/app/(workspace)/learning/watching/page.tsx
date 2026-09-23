@@ -9,11 +9,11 @@ export default function WatchingPage() {
   const query = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
-  const requested = query.get('create') === '1' || query.has('video')
+  const requested = query?.get('create') === '1' || Boolean(query?.has('video'))
   const [creating, setCreating] = useState(requested)
   if (requested && !creating) setCreating(true)
   useEffect(() => {
-    if (!requested) return
+    if (!requested || !query || !pathname) return
     if (query.get('create') === '1') {
       const next = new URLSearchParams(query.toString())
       next.delete('create')

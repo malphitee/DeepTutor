@@ -104,8 +104,8 @@ function BookPageInner() {
   const { t } = useTranslation()
   const router = useRouter()
   const routeParams = useParams<{ bookId?: string; pageId?: string }>()
-  const requestedBookId = routeParams.bookId?.trim() || null
-  const requestedPageId = routeParams.pageId?.trim() || null
+  const requestedBookId = routeParams?.bookId?.trim() || null
+  const requestedPageId = routeParams?.pageId?.trim() || null
   const [books, setBooks] = useState<Book[]>([])
   const [canCreateBook, setCanCreateBook] = useState(true)
   const [loadingBooks, setLoadingBooks] = useState(true)

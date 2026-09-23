@@ -10,7 +10,8 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/learning/books',
   useSearchParams: () => new URLSearchParams(mocks.query),
 }))
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
+const t = (key: string) => key
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t }) }))
 vi.mock('@/hooks/useChatWorkspaces', () => ({ useChatWorkspaces: () => ({
   workspaces: [{ workspace_id: 'other', display_name: 'Other', status: 'ready' }], error: '',
 }) }))

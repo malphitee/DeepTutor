@@ -15,11 +15,11 @@ import { listCourses } from "@/lib/courses-api";
 function NotebookRoute() {
   const routeParams = useParams<{ notebookId?: string }>();
   const searchParams = useSearchParams();
-  const requested = routeParams.notebookId?.trim() || null;
+  const requested = routeParams?.notebookId?.trim() || null;
   // A course scope arrives as `/notebooks?course=<id>`, from the course page or
   // a Course Study hand-off. Resolved here rather than in the console so the
   // console stays a pure view over whatever list it is handed.
-  const courseId = searchParams.get("course")?.trim() ?? "";
+  const courseId = searchParams?.get("course")?.trim() ?? "";
   const [courseScope, setCourseScope] = useState<NotebookCourseScope | null>(
     null,
   );

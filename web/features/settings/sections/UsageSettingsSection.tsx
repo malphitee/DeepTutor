@@ -13,7 +13,7 @@ export default function UsageSettingsSection() {
   const router = useRouter()
   const search = useSearchParams()
   const currentYear = new Date().getFullYear()
-  const year = usageYear(search.get('year'), currentYear)
+  const year = usageYear(search?.get('year') ?? null, currentYear)
   const [snapshot, setSnapshot] = useState<{
     key: string
     data: UsageStatistics | null
@@ -37,7 +37,7 @@ export default function UsageSettingsSection() {
     return () => controller.abort()
   }, [year, requestKey])
   const changeYear = (next: number) => {
-    const query = new URLSearchParams(search.toString())
+    const query = new URLSearchParams(search?.toString())
     query.set('year', String(next))
     router.push(`/settings/usage?${query}`, { scroll: false })
   }

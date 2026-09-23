@@ -16,6 +16,6 @@ function ScopeLifetime({ children }: { children: ReactNode }) {
 /** Reset content state even for query-only navigation and browser back/forward. */
 export function WorkspaceRuntimeBoundary({ children }: { children: ReactNode }) {
   const query = useSearchParams()
-  const workspaceId = query.get('dt_workspace') ?? query.get('workspace') ?? ''
+  const workspaceId = query?.get('dt_workspace') ?? query?.get('workspace') ?? ''
   return <Fragment key={workspaceId}><ScopeLifetime>{children}</ScopeLifetime></Fragment>
 }

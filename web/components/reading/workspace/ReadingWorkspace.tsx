@@ -94,12 +94,24 @@ interface ReaderAskDetail {
 
 export function ReadingWorkspacePage() {
   const params = useParams<{ workspaceId: string }>();
-  const workspaceId = params.workspaceId;
   // From the path, not from route params: the first turn binds its session id
   // with the native history API so the workspace is not torn down mid-answer,
   // and `useParams` does not follow that — `usePathname` does.
-  const sessionIdParam = readingSessionIdFromPath(usePathname());
-  const courseId = useSearchParams().get("course")?.trim() ?? "";
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  if (!params || !pathname || !searchParams) return null;
+  return <ReadingWorkspaceContent
+    workspaceId={params.workspaceId}
+    sessionIdParam={readingSessionIdFromPath(pathname)}
+    courseId={searchParams.get("course")?.trim() ?? ""}
+  />;
+}
+
+function ReadingWorkspaceContent({ workspaceId, sessionIdParam, courseId }: {
+  workspaceId: string;
+  sessionIdParam: string | null;
+  courseId: string;
+}) {
   const router = useRouter();
   const { t } = useTranslation();
   // The shell only needs to *send* (guided one-click prompts). Rendering the

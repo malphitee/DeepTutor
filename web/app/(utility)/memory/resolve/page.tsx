@@ -23,7 +23,7 @@ function ResolveInner() {
   const { t } = useTranslation();
   const params = useSearchParams();
   const router = useRouter();
-  const id = params.get("id");
+  const id = params?.get("id");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,7 +62,7 @@ function ResolveInner() {
     };
   }, [id, router, t]);
 
-  const message = !id ? t("Missing ?id= in URL") : error;
+  const message = params && !id ? t("Missing ?id= in URL") : error;
 
   if (message) {
     return (

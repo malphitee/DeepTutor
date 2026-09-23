@@ -24,9 +24,10 @@ export default function SettingsMain({ children }: { children: React.ReactNode }
   const scroller = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const priorPath = useRef(pathname)
-  const section = pathname.split('/')[2] || 'general'
+  const section = pathname?.split('/')[2] || 'general'
 
   useEffect(() => {
+    if (!pathname) return
     setActiveSection(section)
     scroller.current?.scrollTo({ top: 0, behavior: 'instant' })
     if (priorPath.current !== pathname) content.current?.focus({ preventScroll: true })

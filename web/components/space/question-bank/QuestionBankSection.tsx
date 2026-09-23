@@ -60,7 +60,7 @@ export default function QuestionBankSection({
   // hand-off — and narrows the whole surface for the visit. It is deliberately
   // not part of the scope rail: the learner keeps clicking through wrong /
   // bookmarked / a category *inside* the course.
-  const courseId = useSearchParams().get("course")?.trim() ?? "";
+  const courseId = useSearchParams()?.get("course")?.trim() ?? "";
   const bank = useQuestionBank({ courseId, mistakesOnly });
   useEffect(() => {
     onChanged?.();

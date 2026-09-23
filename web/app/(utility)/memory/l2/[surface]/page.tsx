@@ -21,11 +21,12 @@ function L2WorkbenchInner() {
   // bullet into view + flash it.
   const params = useParams<{ surface: string }>();
   const search = useSearchParams();
+  if (params === null) return null;
   const surface = params?.surface;
   if (!surface || !SURFACES.includes(surface)) {
     notFound();
   }
-  const focus = search.get("focus") || undefined;
+  const focus = search?.get("focus") || undefined;
   return (
     <MemoryWorkbench layer="L2" initialKey={surface} initialFocus={focus} />
   );

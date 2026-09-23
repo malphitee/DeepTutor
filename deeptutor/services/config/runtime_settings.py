@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from ipaddress import ip_address
 import json
 import os
 from pathlib import Path
@@ -84,6 +85,10 @@ DEFAULT_AUTH_SETTINGS: dict[str, Any] = {
     "password_hash": "",
     "token_expire_hours": 24,
     "cookie_secure": False,
+    # Exact socket-peer IPs the Next registration bridge may trust for XFF.
+    # Empty by default. The backend accepts only the bridge's authenticated
+    # peer proof, never unsigned XFF (including from loopback rewrites).
+    "registration_trusted_proxies": [],
 }
 
 DEFAULT_INTEGRATIONS_SETTINGS: dict[str, Any] = {
@@ -443,6 +448,23 @@ def _string(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _registration_trusted_proxies(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    addresses: list[str] = []
+    for raw in value[:32]:
+        try:
+            address = ip_address(str(raw).strip())
+        except ValueError:
+            continue
+        if "%" in str(address):
+            continue
+        normalized = str(getattr(address, "ipv4_mapped", None) or address)
+        if normalized not in addresses:
+            addresses.append(normalized)
+    return addresses
+
+
 def _string_or_list(value: Any) -> str | list[str]:
     if isinstance(value, list):
         return [item for raw in value if (item := _string(raw))]
@@ -736,9 +758,7 @@ class RuntimeSettingsService:
     def _process_env_value(self, key: str) -> str:
         if self._ignore_process_overrides() and not (
             key in INTEGRATION_PROCESS_OVERRIDE_KEYS
-            and _coerce_bool(
-                self.process_env.get(INTEGRATION_PROCESS_OVERRIDE_SWITCH), False
-            )
+            and _coerce_bool(self.process_env.get(INTEGRATION_PROCESS_OVERRIDE_SWITCH), False)
         ):
             return ""
         value = self.process_env.get(key, "")
@@ -1234,6 +1254,9 @@ class RuntimeSettingsService:
             "password_hash": _string(settings.get("password_hash")),
             "token_expire_hours": max(1, _coerce_int(settings.get("token_expire_hours"), 24)),
             "cookie_secure": _coerce_bool(settings.get("cookie_secure"), False),
+            "registration_trusted_proxies": _registration_trusted_proxies(
+                settings.get("registration_trusted_proxies")
+            ),
         }
 
     def _normalize_integrations(self, settings: dict[str, Any]) -> dict[str, Any]:

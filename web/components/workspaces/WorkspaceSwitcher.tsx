@@ -12,7 +12,7 @@ export function WorkspaceSwitcher() {
   const { t } = useTranslation()
   const { workspaces, error } = useChatWorkspaces()
   const query = useSearchParams()
-  const active = query.get('dt_workspace') ?? query.get('workspace') ?? ''
+  const active = query?.get('dt_workspace') ?? query?.get('workspace') ?? ''
   const [draftError, setDraftError] = useState(false)
   useEffect(() => {
     const failed = () => setDraftError(true)

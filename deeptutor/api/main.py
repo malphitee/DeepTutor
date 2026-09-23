@@ -118,6 +118,17 @@ async def lifespan(app: FastAPI):
     from deeptutor.services.auth import assert_supported_backend, log_isolation_mode
 
     assert_supported_backend()
+    from deeptutor.services.auth import AUTH_ENABLED
+
+    if AUTH_ENABLED:
+        from deeptutor.multi_user.registration_limits import proxy_secret
+        from deeptutor.services.config import load_system_settings
+
+        if int(load_system_settings().get("backend_workers") or 1) != 1:
+            raise RuntimeError("Built-in user and invitation stores require backend_workers=1")
+        # A separate key authenticates socket addresses forwarded by the Next
+        # registration bridge. It is never a JWT key and never reaches a client.
+        proxy_secret(create=True)
     # Announce which posture actually booted so a single-user compatibility
     # deployment cannot be mistaken for the isolated multi-user mode.
     log_isolation_mode()

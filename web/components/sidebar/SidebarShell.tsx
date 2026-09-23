@@ -103,7 +103,7 @@ export function SidebarShell({
   onOrganizeSession,
   footerSlot,
 }: SidebarShellProps) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const router = useRouter();
   const { t } = useTranslation();
   const { sidebarCollapsed, setSidebarCollapsed: setCollapsed } = useAppShell();

@@ -8,7 +8,7 @@ import { listWorkspaces, type ChatWorkspaceRegistration } from '@/lib/workspaces
 export function SkillLibraryScope() {
   const { t } = useTranslation()
   const search = useSearchParams()
-  const scope = search.get('skill_workspace') ?? ''
+  const scope = search?.get('skill_workspace') ?? ''
   const [workspaces, setWorkspaces] = useState<ChatWorkspaceRegistration[]>([])
   const [error, setError] = useState('')
   useEffect(() => {

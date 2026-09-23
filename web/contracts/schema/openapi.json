@@ -180,7 +180,20 @@
       "AdminCreateUserRequest": {
         "description": "Admin user-creation payload.\n\nA preset configures an ordinary account; it never becomes a third role.",
         "properties": {
+          "invite_code": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Code"
+          },
           "password": {
+            "maxLength": 72,
             "title": "Password",
             "type": "string"
           },
@@ -195,6 +208,7 @@
             "type": "string"
           },
           "username": {
+            "maxLength": 254,
             "title": "Username",
             "type": "string"
           }
@@ -695,7 +709,7 @@
           "files": {
             "default": [],
             "items": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "type": "string"
             },
             "title": "Files",
@@ -742,7 +756,7 @@
       "Body_import_docx_api_documents_import_docx_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -762,7 +776,7 @@
             "type": "string"
           },
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           },
@@ -785,7 +799,7 @@
       "Body_import_visualizer_api_visualizers_import_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -799,8 +813,8 @@
       "Body_library_add": {
         "properties": {
           "file": {
+            "contentMediaType": "application/octet-stream",
             "description": "Raw file bytes",
-            "format": "binary",
             "title": "File",
             "type": "string"
           },
@@ -841,7 +855,7 @@
       "Body_speech_to_text_api_voice_stt_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           },
@@ -866,7 +880,7 @@
       "Body_upload_avatar_api_auth_profile_avatar_put": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -885,7 +899,7 @@
           },
           "files": {
             "items": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "type": "string"
             },
             "title": "Files",
@@ -912,7 +926,7 @@
       "Body_upload_material_api_reading_materials_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -2055,6 +2069,11 @@
           },
           "name": {
             "title": "Name",
+            "type": "string"
+          },
+          "partner_id": {
+            "default": "",
+            "title": "Partner Id",
             "type": "string"
           }
         },
@@ -4168,6 +4187,46 @@
           }
         },
         "title": "InvidiousSettings",
+        "type": "object"
+      },
+      "InviteCreateRequest": {
+        "properties": {
+          "batch_count": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Batch Count",
+            "type": "integer"
+          },
+          "expires_in_days": {
+            "anyOf": [
+              {
+                "maximum": 365.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 7,
+            "title": "Expires In Days"
+          },
+          "max_uses": {
+            "default": 1,
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Max Uses",
+            "type": "integer"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "title": "InviteCreateRequest",
         "type": "object"
       },
       "KnowledgeBaseInfo": {
@@ -7374,11 +7433,25 @@
       "RegisterRequest": {
         "description": "Payload for the POST /register endpoint.",
         "properties": {
+          "invite_code": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Code"
+          },
           "password": {
+            "maxLength": 72,
             "title": "Password",
             "type": "string"
           },
           "username": {
+            "maxLength": 254,
             "title": "Username",
             "type": "string"
           }
@@ -7388,6 +7461,29 @@
           "password"
         ],
         "title": "RegisterRequest",
+        "type": "object"
+      },
+      "RegistrationStatusResponse": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "invite_required": {
+            "title": "Invite Required",
+            "type": "boolean"
+          },
+          "is_first_user": {
+            "title": "Is First User",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available",
+          "is_first_user",
+          "invite_required"
+        ],
+        "title": "RegistrationStatusResponse",
         "type": "object"
       },
       "RegistryEditPayload": {
@@ -8110,6 +8206,20 @@
           "title"
         ],
         "title": "SessionSummary",
+        "type": "object"
+      },
+      "SetDisabledRequest": {
+        "description": "Payload for enabling or disabling a local account.",
+        "properties": {
+          "disabled": {
+            "title": "Disabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "disabled"
+        ],
+        "title": "SetDisabledRequest",
         "type": "object"
       },
       "SetRoleRequest": {
@@ -12070,6 +12180,232 @@
         ]
       }
     },
+    "/api/auth/invites": {
+      "get": {
+        "operationId": "get_invites_api_auth_invites_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Invites",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "issue_invites_api_auth_invites_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue Invites",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/invites/{invite_id}/revoke": {
+      "post": {
+        "operationId": "revoke_invitation_api_auth_invites__invite_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invite_id",
+            "required": true,
+            "schema": {
+              "title": "Invite Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/auth/is_first_user": {
       "get": {
         "description": "Return whether the user store is empty (used by the register UI).",
@@ -12673,7 +13009,7 @@
     },
     "/api/auth/register": {
       "post": {
-        "description": "Bootstrap-only registration.\n\nPublic endpoint that creates the *first* admin account when the user store\nis empty. Once an admin exists, this endpoint is closed; further accounts\nmust be created by an admin via ``POST /api/auth/users``.\n\nOnly available when AUTH_ENABLED=true.",
+        "description": "Create the bootstrap admin, or atomically redeem an invitation for a user.",
         "operationId": "register_api_auth_register_post",
         "requestBody": {
           "content": {
@@ -12689,11 +13025,7 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Register Api Auth Register Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -12710,6 +13042,27 @@
           }
         },
         "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/registration-status": {
+      "get": {
+        "operationId": "registration_status_api_auth_registration_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Registration Status",
         "tags": [
           "auth"
         ]
@@ -12851,7 +13204,7 @@
         ]
       },
       "post": {
-        "description": "Admin-only: create a new user account.\n\nReplaces the public ``/register`` flow once the first admin exists. The\nnew account is always created with role=``user``; admins can promote\nlater via ``PUT /users/{username}/role``.",
+        "description": "Admin-only: create a new user account.\n\nCoexists with invitation registration. The new account starts with\nrole=``user``; admins can promote it later via ``PUT /users/{username}/role``.",
         "operationId": "admin_create_user_api_auth_users_post",
         "parameters": [
           {
@@ -12999,6 +13352,93 @@
           }
         },
         "summary": "Remove User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/users/{username}/disabled": {
+      "put": {
+        "description": "Disable/enable an account and invalidate its existing sessions.",
+        "operationId": "update_user_disabled_api_auth_users__username__disabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "title": "Username",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDisabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update User Disabled Api Auth Users  Username  Disabled Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update User Disabled",
         "tags": [
           "auth"
         ]
@@ -52702,7 +53142,7 @@
         ]
       },
       "post": {
-        "description": "Connect a local or remote subagent as a selectable KB.",
+        "description": "Connect a local, remote, or Partner subagent as a selectable KB.\n\nA partner connection (``agent_kind == \"partner\"``) binds a ``partner_id``\ninstead of a working directory: consulting it opens a fresh session on that\npartner, exactly as if the user started one from the partner page. Every\nconsult within one DeepTutor chat lands in that one partner session.",
         "operationId": "create_connection_api_subagents_connections_post",
         "parameters": [
           {
@@ -52989,6 +53429,70 @@
           }
         },
         "summary": "Detect Subagents",
+        "tags": [
+          "subagents"
+        ]
+      }
+    },
+    "/api/subagents/partners": {
+      "get": {
+        "description": "Partners the current user can connect & consult.\n\nReturns every partner for an admin, or just the ones an admin has assigned\nfor a non-admin. The partner CRUD API (``/api/partners``) stays fully\nadmin-gated; this is the read surface the connect flow and the partner list\npage use, so a non-admin sees their assigned partners without a 403.",
+        "operationId": "list_visible_partners_api_subagents_partners_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Visible Partners",
         "tags": [
           "subagents"
         ]

@@ -11,7 +11,7 @@ interface AdminLinkProps {
 }
 
 export function AdminLink({ collapsed = false }: AdminLinkProps) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const { t } = useTranslation();
   const { enabled, isAdmin } = useAuthStatus();
 

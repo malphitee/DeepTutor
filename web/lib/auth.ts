@@ -69,7 +69,8 @@ export function fetchAuthStatus(): Promise<AuthStatus | null> {
           value: status,
           // Retry unavailable backends quickly; stable answers can be shared
           // across the shell and Settings providers for one navigation.
-          expiresAt: Date.now() + (status === null ? 1_000 : AUTH_STATUS_CACHE_MS),
+          expiresAt:
+            Date.now() + (status === null ? 1_000 : AUTH_STATUS_CACHE_MS),
         };
         return status;
       })
@@ -119,7 +120,7 @@ function extractDetail(detail: unknown): string {
   if (Array.isArray(detail) && detail.length > 0) {
     const first = detail[0];
     if (typeof first === "object" && first !== null && "msg" in first)
-      return String((first as { msg: unknown }).msg);
+      return String((first as { msg: unknown }).msg).replace(/^Value error,\s*/, "");
   }
   return "Request failed";
 }
@@ -130,17 +131,20 @@ function extractDetail(detail: unknown): string {
 export async function register(
   username: string,
   password: string,
+  inviteCode?: string,
 ): Promise<{
   ok: boolean;
   role?: string;
   is_first_user?: boolean;
   error?: string;
+  error_code?: string;
+  retry_after?: number;
 }> {
   try {
     const res = await apiFetch(apiUrl("/api/auth/register"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, invite_code: inviteCode }),
       // Registration validation failures (e.g. 400/401) should surface inline
       // rather than bounce the user through the global login redirect.
       skipAuthRedirect: true,
@@ -151,10 +155,51 @@ export async function register(
       invalidateAuthStatusCache();
       return { ok: true, role: data.role, is_first_user: data.is_first_user };
     }
-    return { ok: false, error: extractDetail(data.detail) };
+    const retryHeader = res.headers.get("Retry-After");
+    const retrySeconds = retryHeader === null ? NaN : Number(retryHeader);
+    const retryAfter = Number.isFinite(retrySeconds)
+      ? Math.max(1, Math.ceil(retrySeconds))
+      : retryHeader
+        ? Math.max(1, Math.ceil((Date.parse(retryHeader) - Date.now()) / 1000))
+        : NaN;
+    return {
+      ok: false,
+      error: extractDetail(data.detail),
+      error_code:
+        typeof data.error_code === "string" ? data.error_code : undefined,
+      retry_after:
+        res.status === 429 && Number.isFinite(retryAfter)
+          ? retryAfter
+          : undefined,
+    };
   } catch {
     return { ok: false, error: "Could not reach the server" };
   }
+}
+
+export interface RegistrationStatus {
+  available: boolean;
+  is_first_user: boolean;
+  invite_required: boolean;
+}
+
+/** A failed status lookup must never be mistaken for bootstrap admission. */
+export async function fetchRegistrationStatus(): Promise<RegistrationStatus> {
+  const res = await apiFetch(apiUrl("/api/auth/registration-status"), {
+    skipAuthRedirect: true,
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Could not check registration availability.");
+  const data: RegistrationStatus = await res.json();
+  if (
+    typeof data.available !== "boolean" ||
+    typeof data.is_first_user !== "boolean" ||
+    typeof data.invite_required !== "boolean" ||
+    (data.available && data.is_first_user === data.invite_required)
+  ) {
+    throw new Error("Could not check registration availability.");
+  }
+  return data;
 }
 
 /**

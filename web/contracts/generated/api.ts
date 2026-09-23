@@ -172,6 +172,41 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/auth/invites": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /** Get Invites */
+    readonly get: operations["get_invites_api_auth_invites_get"];
+    readonly put?: never;
+    /** Issue Invites */
+    readonly post: operations["issue_invites_api_auth_invites_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/auth/invites/{invite_id}/revoke": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /** Revoke Invitation */
+    readonly post: operations["revoke_invitation_api_auth_invites__invite_id__revoke_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/auth/is_first_user": {
     readonly parameters: {
       readonly query?: never;
@@ -342,15 +377,26 @@ export interface paths {
     readonly put?: never;
     /**
      * Register
-     * @description Bootstrap-only registration.
-     *
-     *     Public endpoint that creates the *first* admin account when the user store
-     *     is empty. Once an admin exists, this endpoint is closed; further accounts
-     *     must be created by an admin via ``POST /api/auth/users``.
-     *
-     *     Only available when AUTH_ENABLED=true.
+     * @description Create the bootstrap admin, or atomically redeem an invitation for a user.
      */
     readonly post: operations["register_api_auth_register_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/auth/registration-status": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /** Registration Status */
+    readonly get: operations["registration_status_api_auth_registration_status_get"];
+    readonly put?: never;
+    readonly post?: never;
     readonly delete?: never;
     readonly options?: never;
     readonly head?: never;
@@ -394,9 +440,8 @@ export interface paths {
      * Admin Create User
      * @description Admin-only: create a new user account.
      *
-     *     Replaces the public ``/register`` flow once the first admin exists. The
-     *     new account is always created with role=``user``; admins can promote
-     *     later via ``PUT /users/{username}/role``.
+     *     Coexists with invitation registration. The new account starts with
+     *     role=``user``; admins can promote it later via ``PUT /users/{username}/role``.
      */
     readonly post: operations["admin_create_user_api_auth_users_post"];
     readonly delete?: never;
@@ -420,6 +465,26 @@ export interface paths {
      * @description Delete a user. Admins cannot delete their own account.
      */
     readonly delete: operations["remove_user_api_auth_users__username__delete"];
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/auth/users/{username}/disabled": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    /**
+     * Update User Disabled
+     * @description Disable/enable an account and invalidate its existing sessions.
+     */
+    readonly put: operations["update_user_disabled_api_auth_users__username__disabled_put"];
+    readonly post?: never;
+    readonly delete?: never;
     readonly options?: never;
     readonly head?: never;
     readonly patch?: never;
@@ -8781,7 +8846,12 @@ export interface paths {
     readonly put?: never;
     /**
      * Create Connection
-     * @description Connect a local or remote subagent as a selectable KB.
+     * @description Connect a local, remote, or Partner subagent as a selectable KB.
+     *
+     *     A partner connection (``agent_kind == "partner"``) binds a ``partner_id``
+     *     instead of a working directory: consulting it opens a fresh session on that
+     *     partner, exactly as if the user started one from the partner page. Every
+     *     consult within one DeepTutor chat lands in that one partner session.
      */
     readonly post: operations["create_connection_api_subagents_connections_post"];
     readonly delete?: never;
@@ -8848,6 +8918,31 @@ export interface paths {
      * @description Report which local and remote agent backends are usable.
      */
     readonly get: operations["detect_subagents_api_subagents_detect_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/subagents/partners": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * List Visible Partners
+     * @description Partners the current user can connect & consult.
+     *
+     *     Returns every partner for an admin, or just the ones an admin has assigned
+     *     for a non-admin. The partner CRUD API (``/api/partners``) stays fully
+     *     admin-gated; this is the read surface the connect flow and the partner list
+     *     page use, so a non-admin sees their assigned partners without a 403.
+     */
+    readonly get: operations["list_visible_partners_api_subagents_partners_get"];
     readonly put?: never;
     readonly post?: never;
     readonly delete?: never;
@@ -9847,6 +9942,8 @@ export interface components {
      *     A preset configures an ordinary account; it never becomes a third role.
      */
     readonly AdminCreateUserRequest: {
+      /** Invite Code */
+      readonly invite_code?: string | null;
       /** Password */
       readonly password: string;
       /**
@@ -10151,10 +10248,7 @@ export interface components {
     };
     /** Body_import_docx_api_documents_import_docx_post */
     readonly Body_import_docx_api_documents_import_docx_post: {
-      /**
-       * File
-       * Format: binary
-       */
+      /** File */
       readonly file: string;
     };
     /** Body_import_preview_api_question_notebook_practice_import_preview_post */
@@ -10164,10 +10258,7 @@ export interface components {
        * @default
        */
       readonly course_id: string;
-      /**
-       * File
-       * Format: binary
-       */
+      /** File */
       readonly file: string;
       /**
        * Target
@@ -10178,17 +10269,13 @@ export interface components {
     };
     /** Body_import_visualizer_api_visualizers_import_post */
     readonly Body_import_visualizer_api_visualizers_import_post: {
-      /**
-       * File
-       * Format: binary
-       */
+      /** File */
       readonly file: string;
     };
     /** Body_library_add */
     readonly Body_library_add: {
       /**
        * File
-       * Format: binary
        * @description Raw file bytes
        */
       readonly file: string;
@@ -10218,20 +10305,14 @@ export interface components {
     };
     /** Body_speech_to_text_api_voice_stt_post */
     readonly Body_speech_to_text_api_voice_stt_post: {
-      /**
-       * File
-       * Format: binary
-       */
+      /** File */
       readonly file: string;
       /** Language */
       readonly language?: string | null;
     };
     /** Body_upload_avatar_api_auth_profile_avatar_put */
     readonly Body_upload_avatar_api_auth_profile_avatar_put: {
-      /**
-       * File
-       * Format: binary
-       */
+      /** File */
       readonly file: string;
     };
     /** Body_upload_files_api_knowledge_bases__kb_name__upload_post */
@@ -10247,10 +10328,7 @@ export interface components {
     };
     /** Body_upload_material_api_reading_materials_post */
     readonly Body_upload_material_api_reading_materials_post: {
-      /**
-       * File
-       * Format: binary
-       */
+      /** File */
       readonly file: string;
     };
     /** BookmarkInfo */
@@ -10786,6 +10864,11 @@ export interface components {
       readonly cwd: string;
       /** Name */
       readonly name: string;
+      /**
+       * Partner Id
+       * @default
+       */
+      readonly partner_id: string;
     };
     /** ConnectWeKnoraRequest */
     readonly ConnectWeKnoraRequest: {
@@ -11719,6 +11802,29 @@ export interface components {
        * @default
        */
       readonly public_base_url: string;
+    };
+    /** InviteCreateRequest */
+    readonly InviteCreateRequest: {
+      /**
+       * Batch Count
+       * @default 1
+       */
+      readonly batch_count: number;
+      /**
+       * Expires In Days
+       * @default 7
+       */
+      readonly expires_in_days: number | null;
+      /**
+       * Max Uses
+       * @default 1
+       */
+      readonly max_uses: number;
+      /**
+       * Note
+       * @default
+       */
+      readonly note: string;
     };
     /** KnowledgeBaseInfo */
     readonly KnowledgeBaseInfo: {
@@ -13337,10 +13443,21 @@ export interface components {
      * @description Payload for the POST /register endpoint.
      */
     readonly RegisterRequest: {
+      /** Invite Code */
+      readonly invite_code?: string | null;
       /** Password */
       readonly password: string;
       /** Username */
       readonly username: string;
+    };
+    /** RegistrationStatusResponse */
+    readonly RegistrationStatusResponse: {
+      /** Available */
+      readonly available: boolean;
+      /** Invite Required */
+      readonly invite_required: boolean;
+      /** Is First User */
+      readonly is_first_user: boolean;
     };
     /** RegistryEditPayload */
     readonly RegistryEditPayload: {
@@ -13628,6 +13745,14 @@ export interface components {
        * @default null
        */
       readonly updated_at: number | null;
+    };
+    /**
+     * SetDisabledRequest
+     * @description Payload for enabling or disabling a local account.
+     */
+    readonly SetDisabledRequest: {
+      /** Disabled */
+      readonly disabled: boolean;
     };
     /**
      * SetRoleRequest
@@ -15255,6 +15380,8 @@ export type SchemaInstallSkillRequest =
   components["schemas"]["InstallSkillRequest"];
 export type SchemaInvidiousSettings =
   components["schemas"]["InvidiousSettings"];
+export type SchemaInviteCreateRequest =
+  components["schemas"]["InviteCreateRequest"];
 export type SchemaKnowledgeBaseInfo =
   components["schemas"]["KnowledgeBaseInfo"];
 export type SchemaLanguageUpdate = components["schemas"]["LanguageUpdate"];
@@ -15383,6 +15510,8 @@ export type SchemaRebuildBookRequest =
 export type SchemaRegenerateBlockRequest =
   components["schemas"]["RegenerateBlockRequest"];
 export type SchemaRegisterRequest = components["schemas"]["RegisterRequest"];
+export type SchemaRegistrationStatusResponse =
+  components["schemas"]["RegistrationStatusResponse"];
 export type SchemaRegistryEditPayload =
   components["schemas"]["RegistryEditPayload"];
 export type SchemaRenamePathRequest =
@@ -15406,6 +15535,8 @@ export type SchemaSessionOrganizationRequest =
 export type SchemaSessionRenameRequest =
   components["schemas"]["SessionRenameRequest"];
 export type SchemaSessionSummary = components["schemas"]["SessionSummary"];
+export type SchemaSetDisabledRequest =
+  components["schemas"]["SetDisabledRequest"];
 export type SchemaSetRoleRequest = components["schemas"]["SetRoleRequest"];
 export type SchemaSetSessionModeRequest =
   components["schemas"]["SetSessionModeRequest"];
@@ -15837,6 +15968,114 @@ export interface operations {
       };
     };
   };
+  readonly get_invites_api_auth_invites_get: {
+    readonly parameters: {
+      readonly query?: {
+        readonly limit?: number;
+        readonly offset?: number;
+      };
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly issue_invites_api_auth_invites_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["InviteCreateRequest"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 201: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly revoke_invitation_api_auth_invites__invite_id__revoke_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path: {
+        readonly invite_id: string;
+      };
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly check_is_first_user_api_auth_is_first_user_get: {
     readonly parameters: {
       readonly query?: never;
@@ -16188,9 +16427,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": {
-            readonly [key: string]: unknown;
-          };
+          readonly "application/json": unknown;
         };
       };
       /** @description Validation Error */
@@ -16200,6 +16437,26 @@ export interface operations {
         };
         content: {
           readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly registration_status_api_auth_registration_status_get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["RegistrationStatusResponse"];
         };
       };
     };
@@ -16323,6 +16580,47 @@ export interface operations {
       };
     };
     readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly update_user_disabled_api_auth_users__username__disabled_put: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path: {
+        readonly username: string;
+      };
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["SetDisabledRequest"];
+      };
+    };
     readonly responses: {
       /** @description Successful Response */
       readonly 200: {
@@ -35380,6 +35678,39 @@ export interface operations {
     };
   };
   readonly detect_subagents_api_subagents_detect_get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly list_visible_partners_api_subagents_partners_get: {
     readonly parameters: {
       readonly query?: never;
       readonly header?: {

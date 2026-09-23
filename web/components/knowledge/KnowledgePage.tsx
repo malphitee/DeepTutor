@@ -42,11 +42,19 @@ const EngineDetail = dynamic(
 const CreateKbModal = dynamic(() => import("./CreateKbModal"));
 
 export default function KnowledgePage() {
-  const { t } = useTranslation();
-  const router = useRouter();
   const routeParams = useParams<{ kbName?: string }>();
   const searchParams = useSearchParams();
-  const initialKb = decodeResourceSegment(routeParams.kbName);
+  if (!routeParams || !searchParams) return panelLoading();
+  return <KnowledgePageContent kbName={routeParams.kbName} searchParams={searchParams} />;
+}
+
+function KnowledgePageContent({ kbName, searchParams }: {
+  kbName?: string;
+  searchParams: NonNullable<ReturnType<typeof useSearchParams>>;
+}) {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const initialKb = decodeResourceSegment(kbName);
   const initialEngine = searchParams.get("engine");
   const initialHomeSection: KnowledgeHomeSection =
     initialEngine || searchParams.get("section") === "engines"

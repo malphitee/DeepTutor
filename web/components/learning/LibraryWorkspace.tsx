@@ -36,6 +36,7 @@ export function useLearningCreation(open: () => void) {
   useEffect(() => { openRef.current = open }, [open])
   const consumed = useRef(false)
   useEffect(() => {
+    if (!query || !pathname) return
     if (query.get('create') !== '1') { consumed.current = false; return }
     if (consumed.current) return
     consumed.current = true
@@ -57,6 +58,7 @@ export function useLearningCreation(open: () => void) {
       </select>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <button type="button" className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground" onClick={() => {
+        if (!query || !pathname) return
         setChoosing(false)
         if (destination === activeWorkspaceId()) open()
         else {
@@ -68,7 +70,7 @@ export function useLearningCreation(open: () => void) {
     </div>
   </Modal>
   // Course-created content inherits the course store so its references stay valid.
-  return { begin: () => query.has("course") ? open() : setChoosing(true), dialog }
+  return { begin: () => { if (query && pathname) query.has("course") ? open() : setChoosing(true) }, dialog }
 }
 
 export function requestedLearningCreation() {

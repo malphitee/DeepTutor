@@ -64,7 +64,7 @@ export function SettingsTourOverlay() {
   // perceptual budget.
   useEffect(() => {
     if (!guideStep) return;
-    if (!pathname.startsWith(guideStep.route)) return;
+    if (!pathname?.startsWith(guideStep.route)) return;
     let cancelled = false;
     let attempt = 0;
     const tryResolve = () => {

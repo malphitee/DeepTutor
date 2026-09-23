@@ -90,7 +90,7 @@ const NEXT_CTA_LABELS: Record<string, { zh: string; en: string }> = {
 
 export default function MasteryTopicPage() {
   const params = useParams<{ pathId: string }>();
-  const pathId = String(params.pathId || "");
+  const pathId = String(params?.pathId || "");
   const router = useRouter();
   const { t, i18n } = useTranslation();
   const zh = Boolean(i18n.language?.toLowerCase().startsWith("zh"));
@@ -128,6 +128,7 @@ export default function MasteryTopicPage() {
   };
 
   const loadTopic = useCallback(async () => {
+    if (!pathId) return;
     try {
       const next = await fetchMasteryTopic(pathId, { cache: "no-store" });
       setTopic(next);
@@ -144,6 +145,7 @@ export default function MasteryTopicPage() {
   }, [pathId, t]);
 
   const loadSessions = useCallback(async () => {
+    if (!pathId) return;
     try {
       setSessions(
         await fetchMasteryTopicSessions(pathId, { cache: "no-store" }),
@@ -167,7 +169,7 @@ export default function MasteryTopicPage() {
   }, [activity.revision, activity.signal, loadSessions]);
 
   useEffect(() => {
-    if (topicView !== "board") return;
+    if (!pathId || topicView !== "board") return;
     const controller = new AbortController();
     setBoardError(false);
     fetchLearningBoard(pathId, {

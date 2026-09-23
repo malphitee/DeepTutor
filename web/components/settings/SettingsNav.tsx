@@ -24,7 +24,7 @@ export default function SettingsNav({ onNavigate }: { onNavigate?: () => void })
   const pages = visibleSettingsPages(access)
   const [query, setQuery] = useState('')
   const needle = query.trim().toLocaleLowerCase()
-  const currentKey = pathname.split('/')[2] || 'general'
+  const currentKey = pathname?.split('/')[2] || 'general'
   const currentFamily = settingsPageFamily(currentKey)
   const matches = pages.filter(page =>
     [

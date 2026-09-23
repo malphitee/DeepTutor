@@ -65,12 +65,20 @@ export function WatchingSessionBridge({
 
 /** Responsive presentation only; ChatWorkspace continues to own the single chat runtime. */
 export function WatchingSurface() {
-  const { t } = useTranslation();
-  const { material } = useWatching();
   const params = useSearchParams();
   const route = useParams();
+  if (!params || !route) return null;
+  return <WatchingSurfaceContent params={params} hasSession={!!route.sessionId} />;
+}
+
+function WatchingSurfaceContent({ params, hasSession }: {
+  params: NonNullable<ReturnType<typeof useSearchParams>>;
+  hasSession: boolean;
+}) {
+  const { t } = useTranslation();
+  const { material } = useWatching();
   const [browsing, setBrowsing] = useState(
-    !params.get("video") && !route.sessionId,
+    !params.get("video") && !hasSession,
   );
   const [accountResult, setAccountResult] = useState(params.get("account"));
   const accountMessage = invidiousAccountResultMessage(accountResult);
