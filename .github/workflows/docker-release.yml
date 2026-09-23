@@ -38,49 +38,21 @@ jobs:
       is_stable: ${{ steps.validate.outputs.is_stable }}
       channel: ${{ steps.validate.outputs.channel }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install version parser
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python -m pip install packaging==25.0
+
       - name: Validate dev or version-tag push
         id: validate
-        shell: python
-        run: |
-          import os
-          import re
-
-          if os.environ.get("GITHUB_EVENT_NAME") != "push" or os.environ.get("REF_DELETED") == "true":
-              raise SystemExit("Images are published only for non-deletion pushes")
-          ref = os.environ["GITHUB_REF"]
-          if ref == "refs/heads/dev":
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                  output.write("image_tag=dev\nis_stable=false\nchannel=test\n")
-              raise SystemExit(0)
-          if not ref.startswith("refs/tags/"):
-              raise SystemExit("Only dev or a version tag can publish images")
-
-          tag = ref.removeprefix("refs/tags/")
-          pattern = (
-              r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-              r"(?:"
-              r"(?:(?:a|b|rc)(?:0|[1-9]\d*))?"
-              r"(?:\.post(?:0|[1-9]\d*))?"
-              r"(?:\.dev(?:0|[1-9]\d*))?"
-              r"|-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*"
-              r")"
-              r"(?:\+[0-9A-Za-z]+(?:[._-][0-9A-Za-z]+)*)?$"
-          )
-          if not re.fullmatch(pattern, tag):
-              raise SystemExit(
-                  f"Git tag {tag!r} is not an image version tag "
-                  "(expected vX.Y.Z with an optional suffix)."
-              )
-          # '+' is valid version metadata but not valid in an OCI tag.
-          image_tag = tag[1:].replace("+", "-")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"image_tag={image_tag}\n")
-              output.write(
-                  "is_stable="
-                  + str(bool(re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag))).lower()
-                  + "\n"
-              )
-              output.write("channel=production\n")
+        run: python scripts/validate_image_release.py
         env:
           REF_DELETED: ${{ github.event.deleted }}
 
@@ -142,7 +114,7 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
-            type=sha,format=short,prefix=${{ needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}
+            type=sha,format=short,prefix=dev-,enable=${{ needs.validate-release-tag.outputs.channel == 'test' }}
             type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Build and push
@@ -188,7 +160,7 @@ jobs:
           name: image-digests-${{ matrix.arch }}
           path: ${{ runner.temp }}/image-digests/${{ matrix.arch }}.digest
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
           overwrite: true
 
   publish-manifest:
@@ -197,6 +169,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download platform digests
         uses: actions/download-artifact@v4
         with:
@@ -231,95 +206,14 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
-            type=sha,format=short,prefix=${{ needs.validate-release-tag.outputs.channel == 'test' && 'dev-sha-' || 'sha-' }}
+            type=sha,format=short,prefix=dev-,enable=${{ needs.validate-release-tag.outputs.channel == 'test' }}
             type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Publish and verify manifests
         id: publish
-        shell: python
+        run: python scripts/publish_image_manifests.py
         env:
           DIGEST_DIR: ${{ runner.temp }}/image-digests
           METADATA_JSON: ${{ steps.meta.outputs.json }}
-        run: |
-          import json
-          import os
-          from pathlib import Path
-          import re
-          import subprocess
-
-          architectures = ("amd64", "arm64")
-          directory = Path(os.environ["DIGEST_DIR"])
-          expected_paths = {
-              f"image-digests-{arch}/{arch}.digest" for arch in architectures
-          }
-          actual_paths = {
-              str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()
-          }
-          if actual_paths != expected_paths:
-              raise SystemExit("Expected exactly one digest artifact for amd64 and arm64")
-          digests = {}
-          for arch in architectures:
-              digest = (directory / f"image-digests-{arch}/{arch}.digest").read_text().strip()
-              if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-                  raise SystemExit(f"Invalid digest artifact for {arch}")
-              digests[arch] = digest
-          if len(set(digests.values())) != 2:
-              raise SystemExit("Platform digests must be distinct")
-
-          images = (os.environ["GHCR_IMAGE"], os.environ["CNB_IMAGE"])
-          tags = json.loads(os.environ["METADATA_JSON"])["tags"]
-          if not isinstance(tags, list) or not tags or len(tags) != len(set(tags)):
-              raise SystemExit("Expected nonempty unique publication tags")
-          tags_by_image = {image: [] for image in images}
-          for tag in tags:
-              if not isinstance(tag, str):
-                  raise SystemExit("Invalid publication tag")
-              image, separator, suffix = tag.rpartition(":")
-              if image not in tags_by_image or not separator or not re.fullmatch(r"[\w][\w.-]{0,127}", suffix, re.ASCII):
-                  raise SystemExit(f"Unexpected publication destination: {tag}")
-              tags_by_image[image].append(tag)
-          suffixes = [{tag.rpartition(":")[2] for tag in tags_by_image[image]} for image in images]
-          if not suffixes[0] or suffixes[0] != suffixes[1]:
-              raise SystemExit("Both registries must receive the same tags")
-
-          def inspect(reference, field):
-              result = subprocess.run(
-                  ["docker", "buildx", "imagetools", "inspect", reference, "--format", "{{json ." + field + "}}"],
-                  check=True, capture_output=True, text=True,
-              )
-              return json.loads(result.stdout)
-
-          # Confirm both registries have both runnable platforms before moving any tag.
-          for image in images:
-              for arch in architectures:
-                  config = inspect(f"{image}@{digests[arch]}", "Image")
-                  if config.get("os") != "linux" or config.get("architecture") != arch:
-                      raise SystemExit(f"Unexpected platform for {image}@{digests[arch]}")
-
-          for image in images:
-              command = ["docker", "buildx", "imagetools", "create"]
-              for tag in tags_by_image[image]:
-                  command.extend(["--tag", tag])
-              command.extend(f"{image}@{digests[arch]}" for arch in architectures)
-              subprocess.run(command, check=True)
-
-          expected_platforms = {("linux", arch): digests[arch] for arch in architectures}
-          index_digests = set()
-          for tag in tags:
-              manifest = inspect(tag, "Manifest")
-              entries = manifest.get("manifests", [])
-              platforms = {
-                  (entry.get("platform", {}).get("os"), entry.get("platform", {}).get("architecture")): entry.get("digest")
-                  for entry in entries
-              }
-              digest = manifest.get("digest", "")
-              if len(entries) != 2 or platforms != expected_platforms or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-                  raise SystemExit(f"Invalid published platform manifest: {tag}")
-              index_digests.add(digest)
-          if len(index_digests) != 1:
-              raise SystemExit("Published tags or registries have different image digests")
-          digest = index_digests.pop()
-          print(f"Verified linux/amd64 and linux/arm64 in both registries: {digest}")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write(f"Both registries verified at `{digest}` (linux/amd64, linux/arm64).\n\n")
-              summary.writelines(f"- `{tag}`\n" for tag in tags)
+          PUBLICATION_CHANNEL: ${{ needs.validate-release-tag.outputs.channel }}
+          IMAGE_TAG: ${{ needs.validate-release-tag.outputs.image_tag }}

@@ -13,14 +13,33 @@ CNB 对应仓库为 <https://cnb.cool/johnnliu/deeptutor>。代码仍由 GitHub 
 
 | 事件 | 两个仓库上的相同标签 |
 | --- | --- |
-| 合并到 `dev`，或直接推送 `dev` | `dev`、`dev-sha-<12 位提交号>` |
-| 推送稳定版本 tag，如 `v1.2.3` | `1.2.3`、`latest`、`sha-<12 位提交号>` |
-| 推送预发布 tag，如 `v1.2.3-rc.1` 或 `v1.2.3rc1` | `1.2.3-rc.1` 或 `1.2.3rc1`、`sha-<12 位提交号>`，不更新 `latest` |
+| 合并到 `dev`，或直接推送 `dev` | `dev`、`dev-<12 位提交号>` |
+| 推送稳定版本 tag，如 `v1.2.3` | `1.2.3`、`latest` |
+| 推送预发布 tag，如 `v1.2.3-rc.1` | `1.2.3-rc.1`，不更新 `latest` |
 
 普通功能分支和 `main` 的 push 不构建镜像；只有 `dev` 与 `v*` tag 的非删除 push 才发布。
-生产 tag 必须符合版本格式，纯 `vX.Y.Z` 才会更新 `latest`；带 `+` 的版本元数据在镜像标签中
-转为 `-`。测试镜像的提交标签使用独立的 `dev-sha-` 前缀，不会覆盖生产提交标签。
-GitHub Release 不再触发 Docker 发布，PyPI 的原有 Release 流程不变。
+发布 tag 统一采用 SemVer 中以下格式，所有数字均禁止多余前导零：
+
+- 稳定版：`vX.Y.Z`，例如 `v1.2.3`。
+- 预发布：`vX.Y.Z-alpha.N`、`vX.Y.Z-beta.N`、`vX.Y.Z-rc.N`。
+
+只有稳定版更新 `latest`。不接受 `v1.2.3rc1`、`.post1`、`.dev1`、`+build.1` 等其他写法；
+提交号通过测试镜像标签和 OCI 的 revision label 追溯。GitHub Release 不再触发 Docker 发布；
+PyPI 仍在发布 GitHub Release 时触发，但使用相同的 Git tag 格式校验。
+
+## 应用版本一致性
+
+发布前必须先更新并提交 `deeptutor/__version__.py`。Docker 在构建前读取这个唯一版本来源，
+校验它与 Git tag 规范化后一致；不一致就失败。前端页面和 CLI 也读取此文件。
+
+| Git tag | Python `__version__` 示例 | 镜像版本 |
+| --- | --- | --- |
+| `v1.2.3` | `1.2.3` | `1.2.3` |
+| `v1.2.3-alpha.1` | `1.2.3a1` | `1.2.3-alpha.1` |
+| `v1.2.3-beta.2` | `1.2.3b2` | `1.2.3-beta.2` |
+| `v1.2.3-rc.1` | `1.2.3rc1` | `1.2.3-rc.1` |
+
+这是同一版本在 SemVer 标签与 Python PEP 440 中的表示差异。`dev` 日常构建不要求每次修改版本号。
 
 本规则需要触发提交中包含新版工作流。当前功能分支和 `dev` 已同步；生产 tag 应打在包含该
 工作流且已验证的提交上。如果从 `main` 发布，应先将相关代码合入 `main`。
@@ -30,7 +49,7 @@ docker pull ghcr.io/malphitee/deeptutor:dev
 docker pull docker.cnb.cool/johnnliu/deeptutor:dev
 ```
 
-测试通过后，在准备发布的提交上打版本 tag 并推送。例如，以下 `v1.2.3` 仅为示例版本号：
+测试通过并确认应用版本已匹配后，在准备发布的提交上打版本 tag 并推送。例如，以下 `v1.2.3` 仅为示例版本号：
 
 ```bash
 git tag -a v1.2.3 -m "Release v1.2.3"
@@ -42,8 +61,19 @@ docker pull docker.cnb.cool/johnnliu/deeptutor:latest
 ```
 
 仅在本地打 tag 不会触发 GitHub Actions，必须将 tag 推送到 `origin`。
-`latest` 跟随最近一次成功发布的稳定版本，包括重跑旧 tag 的发布。严格固定部署版本可使用
-发布任务给出的镜像 digest。
+`dev` 和 `latest` 是可变别名。`latest` 跟随最近一次成功发布的稳定版本，包括对已有相同镜像
+重跑旧 tag 的发布；严格固定部署版本可使用发布任务给出的镜像 digest。
+
+## 已发布版本与失败恢复
+
+CI 在写入任何生产标签前检查两个仓库的版本标签：不存在才创建；已存在时必须与本轮两种架构
+的 digest 相同，否则拒绝全部写入。同一个版本标签不会被重新构建出的不同镜像覆盖。
+两个仓库的版本镜像校验一致后，才更新 `latest` 等别名。
+
+如果仅一个仓库成功，使用 GitHub Actions 的 **Re-run failed jobs** 重跑失败的汇总任务。
+平台 digest artifacts 保留 7 天；重跑复用原始 digest，只补齐缺失的版本。若重跑全部构建导致
+产物变化，已有版本保护会阻止覆盖，应使用新的版本发布。
+这些检查约束本工作流；仓库外部的手动推送仍取决于注册表自身的权限和不可变标签设置。
 
 ## 凭据与执行方式
 
@@ -75,10 +105,10 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 
 ## 配置验证
 
-本地验证发布条件、标签规则、原生架构构建、双仓库发布及清单校验：
+本地验证版本匹配、发布条件、原生架构构建、版本保护及双仓库清单校验：
 
 ```bash
-./.venv/bin/pytest -q tests/test_release_workflow_guards.py tests/scripts/test_docker_compose.py
+./.venv/bin/pytest -q tests/test_release_workflow_guards.py tests/scripts/test_validate_image_release.py tests/scripts/test_publish_image_manifests.py tests/scripts/test_docker_compose.py
 git diff --check
 ```
 
