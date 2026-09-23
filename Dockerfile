@@ -17,10 +17,10 @@
 # ============================================
 # Stage 1: Frontend Builder
 # ============================================
-# Run on the build platform natively (not under QEMU emulation).
-# The output is platform-independent static assets (JS/HTML/CSS),
-# so there is no need to cross-compile this stage.
-FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-builder
+# Build for the target platform: standalone output includes native dependencies
+# such as sharp, not just JS/HTML/CSS. Reusing an amd64 bundle in an arm64 image
+# breaks Next.js image optimization even when the Node.js binary is correct.
+FROM node:22-slim AS frontend-builder
 
 WORKDIR /app/web
 
@@ -54,8 +54,8 @@ RUN npm run build
 # Stage 1b: Node Runtime for Target Platform
 # ============================================
 # Provides the correctly-architected node binary for the final image.
-# Unlike frontend-builder (pinned to BUILDPLATFORM), this stage pulls
-# the node image matching each target platform (amd64 / arm64).
+# Like frontend-builder, this stage pulls the node image matching each target
+# platform (amd64 / arm64).
 FROM node:22-slim AS node-runtime
 
 # ============================================
@@ -162,6 +162,10 @@ COPY --from=python-base /usr/local/bin /usr/local/bin
 COPY --from=frontend-builder /app/web/.next/standalone/ ./web/
 COPY --from=frontend-builder /app/web/.next/static/ ./web/.next/static/
 COPY --from=frontend-builder /app/web/public/ ./web/public/
+
+# Fail the build if the standalone native image optimizer cannot load in the
+# final target runtime; homepage HTML alone would not catch this mismatch.
+RUN node -e "require('/app/web/node_modules/sharp')"
 
 # Copy application source code
 COPY deeptutor/ ./deeptutor/

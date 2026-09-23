@@ -218,6 +218,34 @@ def test_dockerfile_is_json_driven_without_bundle_sed() -> None:
     assert "export_runtime_settings_to_env" in content
 
 
+def test_standalone_frontend_matches_the_container_target_architecture() -> None:
+    """Next's standalone bundle includes native sharp, not only static assets.
+
+    A BUILDPLATFORM frontend stage copies amd64 native modules into arm64
+    images. Both the frontend dependencies and Node runtime must use the
+    target platform, and the production image must verify native loading.
+    """
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+    for stage in ("frontend-builder", "node-runtime"):
+        assert re.search(
+            rf"^FROM (?:--platform=\$TARGETPLATFORM )?node:\S+ AS {stage}$",
+            content,
+            re.MULTILINE,
+        ), f"{stage} must install dependencies for the target architecture"
+
+    production = content.split("AS production\n", 1)[1].split(
+        "FROM production AS development", 1
+    )[0]
+    standalone_copy = production.index(
+        "COPY --from=frontend-builder /app/web/.next/standalone/ ./web/"
+    )
+    native_check = production.index(
+        "RUN node -e \"require('/app/web/node_modules/sharp')\""
+    )
+    assert native_check > standalone_copy
+
+
 def test_supervisord_runs_as_root_with_unprivileged_children() -> None:
     """supervisord itself must run as root so it can open the container's
     stdout/stderr (``/dev/fd/1,2`` — root-owned pipes under a rootful daemon

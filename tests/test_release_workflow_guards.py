@@ -35,11 +35,14 @@ def _validator_script(publication: str) -> str:
     return validator["steps"][0]["run"]
 
 
-def _run_validator(publication: str, tag: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_validator(
+    publication: str, tag: str, tmp_path: Path, *, event: str = "release"
+) -> subprocess.CompletedProcess[str]:
     output = tmp_path / f"{publication}-output.txt"
     return subprocess.run(
         [sys.executable, "-c", _validator_script(publication)],
         env={
+            "GITHUB_EVENT_NAME": event,
             "RELEASE_TAG": tag,
             "GITHUB_OUTPUT": str(output),
             "PATH": os.environ["PATH"],
@@ -55,7 +58,13 @@ def test_non_version_release_tags_skip_publication(publication: str) -> None:
     document, publish_job_name = _workflow(publication)
     validator = document["jobs"]["validate-release-tag"]
 
-    assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
+    if publication == "docker":
+        assert validator["if"] == (
+            "github.repository == 'malphitee/DeepTutor' && "
+            "(github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))"
+        )
+    else:
+        assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
     assert document["jobs"][publish_job_name]["needs"] == "validate-release-tag"
 
 
@@ -115,3 +124,51 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     assert "needs.validate-release-tag.outputs.image_tag" in tags
     assert "github.event.release.prerelease == false" in tags
     assert "needs.validate-release-tag.outputs.is_stable == 'true'" in tags
+    assert "github.event_name == 'release'" in tags
+    assert metadata["with"]["flavor"] == "latest=false"
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_branch_builds_do_not_require_a_release_or_publish_latest(event: str, tmp_path: Path):
+    result = _run_validator("docker", "", tmp_path, event=event)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "docker-output.txt").read_text() == "image_tag=\nis_stable=false\n"
+
+
+def test_docker_publishes_one_build_to_both_owned_registries():
+    document, publish_job_name = _workflow("docker")
+    # PyYAML follows YAML 1.1, where the Actions key `on` is parsed as True.
+    triggers = document[True]
+    assert triggers["push"]["branches"] == ["main", "feature/user-isolation"]
+    assert "workflow_dispatch" in triggers
+    assert "pull_request" not in triggers
+    assert triggers["release"]["types"] == ["published"]
+    assert document["permissions"]["packages"] == "write"
+    assert document["concurrency"]["cancel-in-progress"] is False
+    assert document["env"]["GHCR_IMAGE"] == "ghcr.io/malphitee/deeptutor"
+    assert document["env"]["CNB_IMAGE"] == "docker.cnb.cool/johnnliu/deeptutor"
+
+    steps = document["jobs"][publish_job_name]["steps"]
+    logins = {
+        step["with"]["registry"]: step["with"]
+        for step in steps
+        if step.get("uses", "").startswith("docker/login-action@")
+    }
+    assert logins["ghcr.io"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert logins["docker.cnb.cool"]["username"] == "cnb"
+    assert logins["docker.cnb.cool"]["password"] == "${{ secrets.CNB_TOKEN }}"
+
+    metadata = next(step["with"] for step in steps if step.get("id") == "meta")
+    assert metadata["images"].splitlines() == ["${{ env.GHCR_IMAGE }}", "${{ env.CNB_IMAGE }}"]
+    assert "type=ref,event=branch,enable=${{ github.event_name != 'release' }}" in metadata["tags"]
+    assert "type=sha,format=short" in metadata["tags"]
+    builders = [
+        step["with"]
+        for step in steps
+        if step.get("uses", "").startswith("docker/build-push-action@")
+    ]
+    assert len(builders) == 1
+    assert builders[0]["push"] is True
+    assert builders[0]["target"] == "production"
+    assert builders[0]["platforms"] == "linux/amd64,linux/arm64"
+    assert builders[0]["tags"] == "${{ steps.meta.outputs.tags }}"
