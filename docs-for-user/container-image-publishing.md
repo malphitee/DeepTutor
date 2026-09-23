@@ -6,18 +6,17 @@
 - `docker.cnb.cool/johnnliu/deeptutor`
 
 CNB 对应仓库为 <https://cnb.cool/johnnliu/deeptutor>。代码仍由 GitHub 提供，CNB 接收镜像。
-测试和生产镜像均使用 Dockerfile 的 `production` 阶段，架构为 `linux/amd64` 和 `linux/arm64`。
-测试环境因此验证与正式发布相同的打包方式；两者由 Git ref 和镜像标签区分。
+生产镜像使用 Dockerfile 的 `production` 阶段，架构为 `linux/amd64` 和 `linux/arm64`。
 
 ## 触发与标签
 
 | 事件 | 两个仓库上的相同标签 |
 | --- | --- |
-| 合并到 `dev`，或直接推送 `dev` | `dev`、`dev-<12 位提交号>` |
-| 推送稳定版本 tag，如 `v1.2.3` | `1.2.3`、`latest` |
-| 推送预发布 tag，如 `v1.2.3-rc.1` | `1.2.3-rc.1`，不更新 `latest` |
+| 在 `main` 的提交上推送稳定版本 tag，如 `v1.2.3` | `1.2.3`、`latest` |
+| 在 `main` 的提交上推送预发布 tag，如 `v1.2.3-rc.1` | `1.2.3-rc.1`，不更新 `latest` |
 
-普通功能分支和 `main` 的 push 不构建镜像；只有 `dev` 与 `v*` tag 的非删除 push 才发布。
+普通分支和分支 push 不构建镜像；只有指向 `main` 历史的 `v*` tag 非删除 push 才发布。
+工作流会在构建前检查 tag 提交已经包含在 `main` 中，从而阻止从 `dev` 或其他分支误发生产镜像。
 发布 tag 统一采用 SemVer 中以下格式，所有数字均禁止多余前导零：
 
 - 稳定版：`vX.Y.Z`，例如 `v1.2.3`。
@@ -39,19 +38,15 @@ PyPI 仍在发布 GitHub Release 时触发，但使用相同的 Git tag 格式�
 | `v1.2.3-beta.2` | `1.2.3b2` | `1.2.3-beta.2` |
 | `v1.2.3-rc.1` | `1.2.3rc1` | `1.2.3-rc.1` |
 
-这是同一版本在 SemVer 标签与 Python PEP 440 中的表示差异。`dev` 日常构建不要求每次修改版本号。
+这是同一版本在 SemVer 标签与 Python PEP 440 中的表示差异。日常修改不发布镜像，因此不要求每次修改版本号。
 
-本规则需要触发提交中包含新版工作流。当前功能分支和 `dev` 已同步；生产 tag 应打在包含该
-工作流且已验证的提交上。如果从 `main` 发布，应先将相关代码合入 `main`。
-
-```bash
-docker pull ghcr.io/malphitee/deeptutor:dev
-docker pull docker.cnb.cool/johnnliu/deeptutor:dev
-```
+生产 tag 应打在 `main` 中已经包含新版工作流、应用版本和待发布代码的提交上。
 
 测试通过并确认应用版本已匹配后，在准备发布的提交上打版本 tag 并推送。例如，以下 `v1.2.3` 仅为示例版本号：
 
 ```bash
+git checkout main
+git pull --ff-only origin main
 git tag -a v1.2.3 -m "Release v1.2.3"
 git push origin v1.2.3
 
@@ -61,7 +56,7 @@ docker pull docker.cnb.cool/johnnliu/deeptutor:latest
 ```
 
 仅在本地打 tag 不会触发 GitHub Actions，必须将 tag 推送到 `origin`。
-`dev` 和 `latest` 是可变别名。`latest` 跟随最近一次成功发布的稳定版本，包括对已有相同镜像
+`latest` 是可变别名，跟随最近一次成功发布的稳定版本，包括对已有相同镜像
 重跑旧 tag 的发布；严格固定部署版本可使用发布任务给出的镜像 digest。
 
 ## 已发布版本与失败恢复
@@ -82,8 +77,8 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 `GITHUB_TOKEN` 和 `packages: write` 权限，无需额外的个人 GitHub 令牌。
 
 两个仓库都先登录，再开始构建。缺少 CNB 令牌时明确失败，不静默省略 CNB 发布。
-测试发布和生产发布各自串行执行，不同版本 tag 共用生产并发组。构建缓存保存在 GHCR，
-按发布通道和架构分开写入，并在构建时读取两个通道的同架构缓存，详见下节。
+生产发布按版本 tag 串行执行。构建缓存保存在 GHCR，按架构写入并在后续版本 tag
+构建时复用，详见下节。
 流程只在 `malphitee/DeepTutor`
 运行发布任务，避免其他 fork 意外向这些固定地址发布。
 
@@ -106,21 +101,19 @@ GitHub 仓库的 Actions Secret `CNB_TOKEN` 保存 CNB 访问令牌；范围限�
 ## 构建缓存
 
 仅使用 `type=gha` 时，即使 `scope=deeptutor-amd64` 相同，GitHub 的 Git ref 访问规则仍然
-生效：新版本 tag 无法读取 `dev` 或其他版本 tag 的缓存。发布流程又不在默认 `main` 分支
-push 时构建，因此无法依靠默认分支预热来解决，首次发新版本往往重新安装全部依赖。
+生效：新版本 tag 无法读取其他版本 tag 的缓存。发布流程只在版本 tag 上构建，首次发新版本
+往往重新安装全部依赖。
 
 现在使用独立的 GHCR BuildKit 缓存标签，复用现有 `GITHUB_TOKEN`，不增加密钥：
 
 | 构建 | 写入缓存标签 | 读取缓存标签 |
 | --- | --- | --- |
-| `dev` / AMD64 | `buildcache-test-amd64` | `buildcache-test-amd64`、`buildcache-production-amd64` |
-| 版本 tag / AMD64 | `buildcache-production-amd64` | 同上 |
-| `dev` / ARM64 | `buildcache-test-arm64` | `buildcache-test-arm64`、`buildcache-production-arm64` |
-| 版本 tag / ARM64 | `buildcache-production-arm64` | 同上 |
+| 版本 tag / AMD64 | `buildcache-production-amd64` | `buildcache-production-amd64` |
+| 版本 tag / ARM64 | `buildcache-production-arm64` | `buildcache-production-arm64` |
 
 这些标签位于 `ghcr.io/malphitee/deeptutor`，是缓存元数据，**不能作为应用镜像部署**。
-缓存不写入 CNB，也不会移动 `dev`、`latest` 或版本镜像标签。通道和架构分开写入，避免
-并行构建覆盖另一通道或架构的缓存；`mode=max` 保存前端和 Python 中间构建阶段。
+缓存不写入 CNB，也不会移动 `latest` 或版本镜像标签。架构分开写入，避免并行构建覆盖
+另一架构的缓存；`mode=max` 保存前端和 Python 中间构建阶段。
 原 GHA 缓存保留为读取回退，不再重复上传，减少缓存导出耗时和每个版本的重复存储。
 
 Dockerfile 已将依赖层放在源码之前：`npm ci` 仅受 Node 基础镜像与前端依赖清单影响，

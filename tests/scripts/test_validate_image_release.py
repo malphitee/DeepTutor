@@ -21,7 +21,6 @@ def run_validator(
     event: str = "push",
     ref: str | None = None,
     deleted: str = "false",
-    without_site_packages: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     repository = tmp_path / "repository"
     scripts = repository / "scripts"
@@ -33,11 +32,8 @@ def run_validator(
         version_directory.mkdir(exist_ok=True)
         (version_directory / "__version__.py").write_text(version_source, encoding="utf-8")
     output = tmp_path / "github-output"
-    command = [sys.executable]
-    if without_site_packages:
-        command.append("-S")
     result = subprocess.run(
-        [*command, str(script)],
+        [sys.executable, str(script)],
         cwd=tmp_path,
         env={
             "PATH": os.environ["PATH"],
@@ -121,6 +117,7 @@ def test_noncanonical_release_tags_fail_without_outputs(tmp_path: Path, tag: str
         ("workflow_dispatch", "refs/heads/dev", "false"),
         ("pull_request", "refs/heads/dev", "false"),
         ("push", "refs/tags/v1.2.3", "true"),
+        ("push", "refs/heads/dev", "false"),
         ("push", "refs/heads/dev", "true"),
         ("push", "refs/heads/dev", "unexpected"),
         ("push", "refs/heads/main", "false"),
@@ -203,16 +200,3 @@ def test_computed_version_cannot_execute_code(tmp_path: Path) -> None:
     assert "literal string assignment" in result.stderr
     assert not marker.exists()
     assert not output.exists()
-
-
-@pytest.mark.parametrize("source", [None, "this is not valid python !!!\n"])
-def test_dev_skips_application_version_and_packaging(tmp_path: Path, source: str | None) -> None:
-    result, output = run_validator(
-        tmp_path,
-        ref="refs/heads/dev",
-        version_source=source,
-        without_site_packages=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert output.read_text() == "image_tag=dev\nis_stable=false\nchannel=test\n"

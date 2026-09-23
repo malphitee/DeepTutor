@@ -69,23 +69,20 @@ def read_application_version(repository_root: Path) -> str:
 
 
 def validate_publication(environment: Mapping[str, str], repository_root: Path) -> dict[str, str]:
-    """Return safe workflow outputs only for a dev push or matching version tag."""
+    """Return safe workflow outputs only for a matching version tag."""
     event = environment.get("GITHUB_EVENT_NAME", "")
     ref = environment.get("GITHUB_REF", "")
     if event != "push" or environment.get("REF_DELETED", "false").lower() != "false":
         raise ValueError(
             f"Unsupported publication event {event!r} for {ref!r}: require an undeleted push."
         )
-    if ref == "refs/heads/dev":
-        return {"image_tag": "dev", "is_stable": "false", "channel": "test"}
-
     if not ref.startswith("refs/tags/"):
-        raise ValueError(f"Only dev or a version tag can publish images, got {ref!r}.")
+        raise ValueError(f"Only a version tag can publish images, got {ref!r}.")
     tag = ref.removeprefix("refs/tags/")
     image_tag, is_stable = parse_release_tag(tag)
 
     application_version = read_application_version(repository_root)
-    # Only version-tag publication needs packaging; dev builds work with the standard library.
+    # Version-tag publication needs packaging to compare SemVer with PEP 440.
     from packaging.version import InvalidVersion, Version
 
     try:
