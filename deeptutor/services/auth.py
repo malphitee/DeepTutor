@@ -152,6 +152,58 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
+def validate_new_password(value: str) -> str:
+    """Shared password policy for registration and self-service changes."""
+    if len(value) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    if len(value.encode("utf-8")) > 72:
+        raise ValueError("Password must be at most 72 UTF-8 bytes")
+    return value
+
+
+class PasswordChangeError(ValueError):
+    """A rejected self-service password change, with a stable API error code."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def change_password(current: TokenPayload, current_password: str, new_password: str) -> None:
+    """Verify the caller's password and atomically revoke its old authentication state.
+
+    Run in a worker thread: bcrypt verification and hashing must not block the
+    event loop or hold the identity-store lock while doing expensive work.
+    """
+    from deeptutor.multi_user.identity import get_user, set_password
+
+    if not AUTH_ENABLED or POCKETBASE_ENABLED or current.user_id == "env-admin":
+        raise PasswordChangeError("password_change_unsupported")
+    validate_new_password(new_password)
+    record = get_user(current.username)
+    if (
+        not record
+        or record.get("id") != current.user_id
+        or record.get("disabled", False)
+        or record.get("role") != current.role
+        or int(record.get("token_version", 0)) != current.token_version
+    ):
+        raise PasswordChangeError("session_expired")
+    if len(current_password.encode("utf-8")) > 72 or not verify_password(
+        current_password, record["hash"]
+    ):
+        raise PasswordChangeError("current_password_incorrect")
+    updated = set_password(
+        current.username,
+        hash_password(new_password),
+        expected_user_id=current.user_id,
+        expected_token_version=current.token_version,
+        expected_hash=record["hash"],
+    )
+    if updated is None:
+        raise PasswordChangeError("session_expired")
+
+
 # ---------------------------------------------------------------------------
 # User store — multi-user JSON store plus optional auth.json bootstrap user
 # ---------------------------------------------------------------------------
@@ -335,17 +387,30 @@ def set_learner_profile(username: str, profile: dict[str, Any] | None) -> dict[s
 # ---------------------------------------------------------------------------
 
 
+class StaleAuthenticationError(ValueError):
+    """Credentials were revoked between authentication and token issuance."""
+
+
 def create_token(
     username: str,
     role: str = "user",
     user_id: str | None = None,
     device_credential_id: str = "",
     device_session_nonce: str = "",
+    *,
+    expected_token_version: int | None = None,
 ) -> str:
     """Create a signed JWT for the given username and role."""
     from jose import jwt
 
     record = _load_users().get(username) or {}
+    if expected_token_version is not None and (
+        not record
+        or record.get("disabled", False)
+        or record.get("id") != user_id
+        or int(record.get("token_version", 0)) != expected_token_version
+    ):
+        raise StaleAuthenticationError("Authentication state changed. Sign in again.")
     if record:
         # Never mint a token with a caller-supplied role for a known account.
         # The identity store is authoritative; the role claim is only a

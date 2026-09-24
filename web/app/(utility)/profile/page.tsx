@@ -24,6 +24,7 @@ import {
 } from "@/components/UserAvatar";
 import { parseAvatarMarker } from "@/lib/avatar";
 import { formatDate, type Language } from "@/lib/datetime";
+import { PasswordChangeCard } from "@/components/profile/PasswordChangeCard";
 
 const AVATAR_OUTPUT_SIZE = 256;
 // Decoding a huge photo just to throw away most pixels wastes memory; the
@@ -222,7 +223,7 @@ export default function ProfilePage() {
               {t("My profile")}
             </h1>
             <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-              {t("View your account and personalize your avatar")}
+              {t("Manage your account, password, and avatar")}
             </p>
           </div>
         </div>
@@ -377,6 +378,8 @@ export default function ProfilePage() {
                 </div>
               </div>
             </div>
+
+            <PasswordChangeCard profile={profile} />
 
             {/* Sign out card */}
             <div className="mt-4 flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">

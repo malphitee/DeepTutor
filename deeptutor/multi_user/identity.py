@@ -509,12 +509,33 @@ def delete_user(username: str) -> bool:
     return True
 
 
-def set_password(username: str, hashed_password: str) -> dict[str, Any] | None:
-    """Replace one account's password hash without changing its identity fields."""
+def set_password(
+    username: str,
+    hashed_password: str,
+    *,
+    expected_user_id: str | None = None,
+    expected_token_version: int | None = None,
+    expected_hash: str | None = None,
+) -> dict[str, Any] | None:
+    """Replace a password, optionally only if its authenticated snapshot still matches.
+
+    Self-service callers verify and hash passwords outside the store lock, then
+    supply all three expectations to reject concurrent revocation, replacement,
+    or another password change. Existing administrative reset callers need no
+    snapshot and can still reset a disabled account's password.
+    """
     with auth_store_transaction():
         users = load_users()
         record = users.get(username)
         if record is None:
+            return None
+        if expected_user_id is not None and (
+            record.get("id") != expected_user_id or record.get("disabled", False)
+        ):
+            return None
+        if expected_token_version is not None and _token_version(record) != expected_token_version:
+            return None
+        if expected_hash is not None and record.get("hash") != expected_hash:
             return None
         record["hash"] = hashed_password
         record["token_version"] = _token_version(record) + 1

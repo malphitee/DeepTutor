@@ -1,4 +1,5 @@
 import { apiFetch, apiUrl } from "@/lib/api";
+import { invalidateAuthStatusCache } from "@/lib/auth";
 
 export interface LearnerProfile {
   age?: number;
@@ -39,6 +40,8 @@ export interface ProfileInfo {
   role: "admin" | "user";
   created_at: string;
   disabled?: boolean;
+  password_change_supported: boolean;
+  password_change_unavailable_reason?: "environment_admin" | "external_auth" | null;
   /** Avatar marker: "", "icon:<name>:<color>", or "img:<version>". */
   avatar?: string;
 }
@@ -56,6 +59,47 @@ export async function getProfile(): Promise<ProfileInfo> {
   const res = await apiFetch(apiUrl("/api/auth/profile"));
   if (!res.ok) throw new Error("Failed to fetch profile");
   return res.json();
+}
+
+export class PasswordChangeError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly status: number,
+  ) {
+    super("Failed to change password");
+    this.name = "PasswordChangeError";
+  }
+}
+
+/** Change the local password; success ends every session, including this one. */
+export async function changeOwnPassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const res = await apiFetch(apiUrl("/api/auth/profile/password"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+    // Render expired-session feedback beside the form before offering sign-in.
+    skipAuthRedirect: true,
+  });
+  const payload = await res.json().catch(() => ({}));
+  const data = payload && typeof payload === "object" ? payload : {};
+  if (!res.ok) {
+    // The sign-in link must not reuse a cached authenticated profile.
+    if (res.status === 401) invalidateAuthStatusCache();
+    throw new PasswordChangeError(
+      typeof data.error_code === "string" ? data.error_code : "request_failed",
+      res.status,
+    );
+  }
+  if (data.ok !== true || data.reauthenticate !== true) {
+    throw new PasswordChangeError("invalid_response", res.status);
+  }
+  invalidateAuthStatusCache();
 }
 
 /**
