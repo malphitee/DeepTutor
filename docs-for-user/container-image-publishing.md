@@ -23,26 +23,28 @@ CNB 对应仓库为 <https://cnb.cool/johnnliu/deeptutor>。代码仍由 GitHub 
 - 预发布：`vX.Y.Z-alpha.N`、`vX.Y.Z-beta.N`、`vX.Y.Z-rc.N`。
 
 只有稳定版更新 `latest`。不接受 `v1.2.3rc1`、`.post1`、`.dev1`、`+build.1` 等其他写法；
-提交号通过测试镜像标签和 OCI 的 revision label 追溯。GitHub Release 不再触发 Docker 发布；
-PyPI 仍在发布 GitHub Release 时触发，但使用相同的 Git tag 格式校验。
+提交号通过 OCI 的 revision label 追溯。GitHub Release 不再触发 Docker 发布，
+PyPI 发布流程也已移除。
 
-## 应用版本一致性
+## 应用版本来源
 
-发布前必须先更新并提交 `deeptutor/__version__.py`。Docker 在构建前读取这个唯一版本来源，
-校验它与 Git tag 规范化后一致；不一致就失败。前端页面和 CLI 也读取此文件。
+生产 Docker 镜像以 Git tag 作为唯一发布版本来源。工作流校验 tag 格式和它是否已包含在
+`main` 中，然后将去掉前缀 `v` 的版本通过 `APP_VERSION` build arg 注入 Docker 构建。
+前端构建版本、容器内后端版本、CLI 横幅和 OCI image version label 都使用这个注入值。
 
-| Git tag | Python `__version__` 示例 | 镜像版本 |
+| Git tag | 注入的应用版本 | 镜像版本 |
 | --- | --- | --- |
 | `v1.2.3` | `1.2.3` | `1.2.3` |
-| `v1.2.3-alpha.1` | `1.2.3a1` | `1.2.3-alpha.1` |
-| `v1.2.3-beta.2` | `1.2.3b2` | `1.2.3-beta.2` |
-| `v1.2.3-rc.1` | `1.2.3rc1` | `1.2.3-rc.1` |
+| `v1.2.3-alpha.1` | `1.2.3-alpha.1` | `1.2.3-alpha.1` |
+| `v1.2.3-beta.2` | `1.2.3-beta.2` | `1.2.3-beta.2` |
+| `v1.2.3-rc.1` | `1.2.3-rc.1` | `1.2.3-rc.1` |
 
-这是同一版本在 SemVer 标签与 Python PEP 440 中的表示差异。日常修改不发布镜像，因此不要求每次修改版本号。
+`deeptutor/__version__.py` 只保留为源码运行和 Python 包安装的 fallback；它不再阻塞或决定
+Docker tag 发布。日常开发与 Docker 发版都不需要为了镜像标签手动修改该文件。
 
-生产 tag 应打在 `main` 中已经包含新版工作流、应用版本和待发布代码的提交上。
+生产 tag 应打在 `main` 中已经包含新版工作流和待发布代码的提交上。
 
-测试通过并确认应用版本已匹配后，在准备发布的提交上打版本 tag 并推送。例如，以下 `v1.2.3` 仅为示例版本号：
+测试通过后，在准备发布的提交上打版本 tag 并推送。例如，以下 `v1.2.3` 仅为示例版本号：
 
 ```bash
 git checkout main

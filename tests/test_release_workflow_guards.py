@@ -8,7 +8,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-from packaging.version import InvalidVersion, Version
 import pytest
 import yaml
 
@@ -45,14 +44,8 @@ def _run_validator(
     assert publication == "docker"
     repository = tmp_path / "repository"
     (repository / "scripts").mkdir(parents=True, exist_ok=True)
-    (repository / "deeptutor").mkdir(exist_ok=True)
     script_path = repository / "scripts/validate_image_release.py"
     script_path.write_text(_validator_script(publication))
-    try:
-        version = str(Version(tag.removeprefix("v")))
-    except InvalidVersion:
-        version = "1.2.3"
-    (repository / "deeptutor/__version__.py").write_text(f"__version__ = {version!r}\n")
     command = [sys.executable, str(script_path)]
     return subprocess.run(
         command,
@@ -307,7 +300,7 @@ def test_registry_cache_is_shared_across_release_tags():
     assert "ignore-error" not in builder["outputs"]
 
 
-def test_docker_validates_checked_out_application_version_before_building():
+def test_docker_validates_tag_ancestry_before_building():
     document, _ = _workflow("docker")
     steps = document["jobs"]["validate-release-tag"]["steps"]
     checkout_index = next(
@@ -322,8 +315,7 @@ def test_docker_validates_checked_out_application_version_before_building():
     validate_index = next(i for i, step in enumerate(steps) if step.get("id") == "validate")
     assert checkout_index < steps.index(verify) < validate_index
     assert steps[validate_index]["run"] == "python scripts/validate_image_release.py"
-    parser = next(step for step in steps if step.get("name") == "Install version parser")
-    assert parser["run"] == "python -m pip install packaging==25.0"
+    assert all(step.get("name") != "Install version parser" for step in steps)
 
 
 def _publication_fixture(tmp_path: Path, monkeypatch):

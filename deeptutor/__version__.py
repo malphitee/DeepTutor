@@ -1,12 +1,21 @@
-"""Single source of truth for the DeepTutor version.
+"""Source-package version and Docker runtime version resolution.
 
-To cut a release, bump ``__version__`` here and commit before tagging.
-Stable tags use ``v1.4.0``; prerelease tags use ``v1.4.0-rc.1`` while the
-Python version can be ``1.4.0rc1`` (likewise alpha/a and beta/b). CI checks
-normalized versions before publishing images or PyPI packages. The web
-sidebar badge and CLI banner read from this file directly.
+``__version__`` remains the fallback for source and Python-package installs.
+Tagged Docker builds inject ``DEEPTUTOR_APP_VERSION`` so the running image,
+CLI banner, and web UI report the Git tag that produced the image.
 """
+
+from __future__ import annotations
+
+import os
 
 __version__ = "1.6.13"
 
-__all__ = ("__version__",)
+
+def get_runtime_version() -> str:
+    """Return the build-injected Docker version or the source fallback."""
+
+    return os.getenv("DEEPTUTOR_APP_VERSION", "").strip() or __version__
+
+
+__all__ = ("__version__", "get_runtime_version")
