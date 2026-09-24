@@ -7,6 +7,6 @@ normalized versions before publishing images or PyPI packages. The web
 sidebar badge and CLI banner read from this file directly.
 """
 
-__version__ = "1.6.12"
+__version__ = "1.6.13"
 
 __all__ = ("__version__",)
