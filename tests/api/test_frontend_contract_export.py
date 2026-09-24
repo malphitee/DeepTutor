@@ -56,6 +56,12 @@ def test_openapi_operation_ids_are_unique_for_type_generation() -> None:
     assert len(operation_ids) == len(set(operation_ids))
 
 
+def test_home_chat_has_no_model_generated_composer_hint_endpoint() -> None:
+    openapi = json.loads(render_contracts()["openapi.json"])
+
+    assert "/api/sessions/{session_id}/ask-hint" not in openapi["paths"]
+
+
 def test_exported_runtime_contract_contains_no_secret_defaults() -> None:
     rendered = render_contracts()
     combined = "\n".join(rendered.values()).lower()

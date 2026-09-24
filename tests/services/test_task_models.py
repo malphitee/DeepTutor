@@ -258,7 +258,6 @@ def test_a_half_written_override_follows_the_global_model(tmp_path: Path) -> Non
             overrides={
                 "session_title": {"mode": "profiles", "active_profile_id": "task-1"},
                 "chat_starters": {"mode": "reference"},
-                "chat_ask_hint": {"mode": "global"},
                 "reading_openers": "gpt-5-nano",
             },
         )
@@ -267,7 +266,6 @@ def test_a_half_written_override_follows_the_global_model(tmp_path: Path) -> Non
     for kind in (
         TaskKind.SESSION_TITLE,
         TaskKind.CHAT_STARTERS,
-        TaskKind.CHAT_ASK_HINT,
         TaskKind.READING_OPENERS,
     ):
         assert task_override(catalog, kind) is None

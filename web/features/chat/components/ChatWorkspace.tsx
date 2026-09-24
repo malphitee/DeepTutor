@@ -98,10 +98,7 @@ import { useMeasuredHeight } from "@/hooks/useMeasuredHeight";
 import { useSetupSync } from "@/hooks/useSetupSync";
 import { listCourses, type StudyCourse } from "@/lib/courses-api";
 import { consumePendingPrompt } from "@/lib/pending-prompt";
-import {
-  fetchSessionAskHint,
-  updateSessionOrganization,
-} from "@/lib/session-api";
+import { updateSessionOrganization } from "@/lib/session-api";
 import {
   DEFAULT_QUIZ_CONFIG,
   buildQuizWSConfig,
@@ -751,26 +748,6 @@ export default function ChatWorkspace({
   // "done" while nothing visibly changes.
   useSetupSync(state.messages);
   const hasMessages = state.messages.length > 0;
-  // A line the user might type next, written by the task model against the
-  // conversation's own tail — general prediction, not a question to ask,
-  // unlike the mastery/reading composers' hint. Empty conversations already
-  // get their own richer suggestions from StarterSuggestions below, so this
-  // only ever runs once there is something to continue. Cleared on session
-  // switch so a prior chat's guess never lingers as this one's placeholder.
-  const [askHint, setAskHint] = useState("");
-  useEffect(() => {
-    setAskHint("");
-  }, [state.sessionId]);
-  useEffect(() => {
-    if (state.isStreaming || !hasMessages || !state.sessionId) return;
-    let cancelled = false;
-    void fetchSessionAskHint(state.sessionId).then((hint) => {
-      if (!cancelled) setAskHint(hint);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [state.isStreaming, hasMessages, state.sessionId, state.messages.length]);
   // Time-of-day greeting: seeded once on mount from the user's local clock so
   // the heading stays stable while they're on the page. State (not useMemo)
   // because the random pick would otherwise mismatch SSR ↔ client hydration.
@@ -2746,8 +2723,6 @@ export default function ChatWorkspace({
                 onSelectCapability={handleSelectCapability}
                 onCancelStreaming={cancelStreamingTurn}
                 prefillInputRef={prefillInputRef}
-                inputPlaceholder={askHint || undefined}
-                inputPlaceholderCompletion={askHint}
               />
               {/* Starter chips sit between the composer and the spacer, so they
                 ride up with the composer on the empty screen and disappear the

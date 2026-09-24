@@ -49,10 +49,6 @@ const TASK_TEXT: Record<string, { label: string; detail: string }> = {
     label: "Starter suggestions",
     detail: "Writes the openings offered under an empty composer.",
   },
-  chat_ask_hint: {
-    label: "Composer hint",
-    detail: "Predicts the line you are likely to type next.",
-  },
   mastery_goal_name: {
     label: "Mastery goal names",
     detail: "Turns what you asked to learn into a short name.",

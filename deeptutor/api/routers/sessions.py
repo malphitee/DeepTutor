@@ -224,14 +224,6 @@ async def get_message_events(
     return trace
 
 
-@router.get("/{session_id}/ask-hint")
-async def get_session_ask_hint(session_id: str) -> dict[str, Any]:
-    """One line the user is likely to type next, for the home composer placeholder."""
-    from deeptutor.services.chat_hints import get_ask_hint
-
-    return await get_ask_hint(session_id)
-
-
 @router.patch("/{session_id}")
 async def rename_session(session_id: str, payload: SessionRenameRequest):
     store = get_session_store()
