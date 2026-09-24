@@ -81,7 +81,7 @@ test("settings visibility is shared by the navigator and independent pages", () 
   assert.match(layout, /<SettingsAccessProvider>/);
 });
 
-test("learner and guardian sections follow the resolved account type", () => {
+test("learner sections follow effective policy and guardian management requires admin", () => {
   const learner = SETTINGS_CATEGORIES.find(
     category => category.key === "learner-profile",
   )!;
@@ -112,7 +112,7 @@ test("learner and guardian sections follow the resolved account type", () => {
     preset: "standard",
   });
   assert.equal(isSettingsCategoryVisible(learner, localAdmin), false);
-  assert.equal(isSettingsCategoryVisible(guardian, localAdmin), false);
+  assert.equal(isSettingsCategoryVisible(guardian, localAdmin), true);
   assert.equal(isSettingsCategoryVisible(agents, localAdmin), true);
 
   const learnerAccount = settingsAccessFromAuthStatus({
@@ -120,6 +120,7 @@ test("learner and guardian sections follow the resolved account type", () => {
     authenticated: true,
     is_admin: false,
     preset: "learner",
+    learning_policy: { age_band: "under_13", locked_persona: "", allowed_capabilities: ["chat"], default_capability: "chat", allowed_surfaces: ["chat", "reading"] },
   });
   assert.equal(isSettingsCategoryVisible(learner, learnerAccount), true);
   assert.equal(isSettingsCategoryVisible(guardian, learnerAccount), false);
@@ -132,7 +133,7 @@ test("learner and guardian sections follow the resolved account type", () => {
     preset: "standard",
   });
   assert.equal(isSettingsCategoryVisible(learner, guardianAccount), false);
-  assert.equal(isSettingsCategoryVisible(guardian, guardianAccount), true);
+  assert.equal(isSettingsCategoryVisible(guardian, guardianAccount), false);
   assert.equal(isSettingsCategoryVisible(agents, guardianAccount), false);
 });
 

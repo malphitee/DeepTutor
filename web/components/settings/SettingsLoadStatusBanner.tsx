@@ -12,7 +12,7 @@ import { useSettings } from "@/features/settings/store/SettingsStore";
 // only in the dev console.
 export function SettingsLoadStatusBanner() {
   const { t } = useTranslation();
-  const { settingsLoading, settingsError, reloadSettings } = useSettings();
+  const { settingsLoading, settingsError, settingsErrorStatus, reloadSettings } = useSettings();
   const [retrying, setRetrying] = useState(false);
 
   if (settingsLoading) {
@@ -25,6 +25,9 @@ export function SettingsLoadStatusBanner() {
   }
 
   if (!settingsError) return null;
+
+  const permissionDenied = settingsErrorStatus === 403;
+  const authenticationRequired = settingsErrorStatus === 401;
 
   const handleRetry = async () => {
     setRetrying(true);
@@ -43,13 +46,19 @@ export function SettingsLoadStatusBanner() {
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="font-medium">
-          {t("Could not load settings from the backend.")}
+          {permissionDenied
+            ? t("These settings are managed by your administrator.")
+            : authenticationRequired
+              ? t("Sign in to load your personal settings.")
+              : t("Could not load settings from the backend.")}
         </div>
         <div className="mt-1 text-xs opacity-90">{settingsError}</div>
         <div className="mt-1 text-xs opacity-75">
-          {t(
-            "Verify the backend is running and NEXT_PUBLIC_API_BASE points to a reachable host. For Docker, see data/user/settings/system.json.",
-          )}
+          {permissionDenied
+            ? t("Your account cannot access these settings. Contact your administrator to review your access.")
+            : authenticationRequired
+              ? t("Your session may have expired. Sign in again, then retry.")
+              : t("Verify the backend is running and NEXT_PUBLIC_API_BASE points to a reachable host. For Docker, see data/user/settings/system.json.")}
         </div>
       </div>
       <button

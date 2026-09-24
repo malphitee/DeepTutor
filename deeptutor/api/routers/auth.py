@@ -635,6 +635,24 @@ def _learning_surface_for_path(path: str) -> str:
     return ""
 
 
+# Personal preferences remain available even when a learning policy only
+# exposes Reading. Match methods and complete paths: granting /settings as a
+# prefix would also expose providers, tools, workspace migration and exports.
+_LEARNING_PERSONAL_SETTINGS_ROUTES = frozenset(
+    {
+        ("GET", "/api/settings"),
+        ("PUT", "/api/settings/ui"),
+        ("PUT", "/api/settings/theme"),
+        ("PUT", "/api/settings/language"),
+        ("PUT", "/api/settings/voice-autoplay"),
+        ("GET", "/api/settings/themes"),
+        ("GET", "/api/settings/draft"),
+        ("PUT", "/api/settings/draft"),
+        ("DELETE", "/api/settings/draft"),
+    }
+)
+
+
 async def require_learning_surface(
     request: Request,
     _: TokenPayload | None = Depends(require_auth),
@@ -642,6 +660,11 @@ async def require_learning_surface(
     """Second-stage default-deny guard for configured learning accounts."""
     from deeptutor.multi_user.learning_access import assert_learning_surface
 
+    if (request.method, request.url.path) in _LEARNING_PERSONAL_SETTINGS_ROUTES:
+        # Authentication has already installed the caller's private scope.
+        # The draft handlers separately restrict learning accounts to validated
+        # interface preferences and, for learner presets, their own profile.
+        return
     try:
         assert_learning_surface(_learning_surface_for_path(request.url.path))
     except PermissionError as exc:

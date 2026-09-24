@@ -27,6 +27,7 @@ import { listNotebooks, listNotebookEntries } from "@/lib/notebook-api";
 import { listPersonas } from "@/lib/personas-api";
 import { listKnowledgeBases } from "@/features/knowledge/api/catalog";
 import { listSkills } from "@/lib/skills-api";
+import { isApiError } from "@/lib/api";
 
 /**
  * Learning Space dashboard — the hub of `/space`.
@@ -50,6 +51,8 @@ type DashKey =
   | "mcp"
   | "cli_apps"
   | "whisper";
+
+type LoadFailure = "denied" | "unavailable";
 
 interface DashboardItem {
   key: DashKey;
@@ -270,11 +273,13 @@ export function visibleGroups(
 export { GROUPS as DASHBOARD_GROUPS };
 
 export default function SpaceDashboard() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const zh = i18n.language?.toLowerCase().startsWith("zh");
   const tr = useCallback((l: Lang) => (zh ? l.zh : l.en), [zh]);
 
   const [counts, setCounts] = useState<Partial<Record<DashKey, number>>>({});
+  const [failures, setFailures] = useState<Partial<Record<DashKey, LoadFailure>>>({});
+  const [attempt, setAttempt] = useState(0);
 
   const capabilityAvailable = useCapabilityFilter();
   const groups = useMemo(
@@ -293,14 +298,20 @@ export default function SpaceDashboard() {
         .then(n => {
           if (!cancelled) setCounts(prev => ({ ...prev, [item.key]: n }));
         })
-        .catch(() => {
-          /* leave undefined → tile just omits the count */
+        .catch(error => {
+          if (!cancelled) setFailures(prev => ({
+            ...prev,
+            [item.key]: isApiError(error) && error.status === 403 ? "denied" : "unavailable",
+          }));
         });
     }
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
+
+  const hasDenied = Object.values(failures).includes("denied");
+  const hasUnavailable = Object.values(failures).includes("unavailable");
 
   return (
     <div>
@@ -316,6 +327,20 @@ export default function SpaceDashboard() {
         </p>
       </header>
 
+      {(hasDenied || hasUnavailable) && (
+        <div role="status" className="mb-6 rounded-lg border border-[var(--border)] p-4 text-sm text-[var(--muted-foreground)]">
+          {hasDenied && <p>{t("Some resources are managed by your administrator. Contact them to request access.")}</p>}
+          {hasUnavailable && <p>{t("Some resources could not be loaded. Try again or contact your administrator for help.")}</p>}
+          {hasUnavailable && (
+            <button type="button" className="mt-2 underline underline-offset-4" onClick={() => {
+              setCounts({});
+              setFailures({});
+              setAttempt(value => value + 1);
+            }}>{t("Retry")}</button>
+          )}
+        </div>
+      )}
+
       <div className="space-y-9">
         {groups.map(group => (
           <section key={group.label.en}>
@@ -328,6 +353,7 @@ export default function SpaceDashboard() {
                   key={item.key}
                   item={item}
                   count={counts[item.key]}
+                  failure={failures[item.key]}
                   tr={tr}
                 />
               ))}
@@ -342,12 +368,15 @@ export default function SpaceDashboard() {
 function DashboardCard({
   item,
   count,
+  failure,
   tr,
 }: {
   item: DashboardItem;
   count: number | undefined;
+  failure?: LoadFailure;
   tr: (l: Lang) => string;
 }) {
+  const { t } = useTranslation();
   const Icon = item.icon;
   const loaded = count !== undefined;
   const formatted = useMemo(
@@ -355,11 +384,8 @@ function DashboardCard({
     [loaded, count]
   );
 
-  return (
-    <Link
-      href={item.href}
-      className="group relative flex flex-col rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 transition-all duration-150 hover:-translate-y-0.5 hover:border-[var(--foreground)]/20 hover:shadow-[0_6px_20px_-12px_rgba(0,0,0,0.25)]"
-    >
+  const content = (
+    <>
       <div className="flex items-start gap-3">
         <span
           aria-hidden
@@ -373,7 +399,11 @@ function DashboardCard({
           </h3>
           {item.unit ? (
             <div className="mt-1 flex items-baseline gap-1.5">
-              {loaded ? (
+              {failure ? (
+                <span className="text-[12px] text-[var(--muted-foreground)]">
+                  {failure === "denied" ? t("Managed by your administrator") : t("Currently unavailable")}
+                </span>
+              ) : loaded ? (
                 <>
                   <span className="text-[20px] font-semibold leading-none tabular-nums text-[var(--foreground)]">
                     {formatted}
@@ -388,10 +418,10 @@ function DashboardCard({
             </div>
           ) : null}
         </div>
-        <ArrowUpRight
+        {failure !== "denied" && <ArrowUpRight
           size={16}
           className="shrink-0 text-[var(--muted-foreground)]/40 transition-colors group-hover:text-[var(--foreground)]"
-        />
+        />}
       </div>
       <p className="mt-3 text-[12.5px] leading-relaxed text-[var(--muted-foreground)]">
         {tr(item.blurb)}
@@ -402,6 +432,12 @@ function DashboardCard({
           {item.credit}
         </span>
       ) : null}
-    </Link>
+    </>
+  );
+  const className = "group relative flex flex-col rounded-xl border border-[var(--border)] bg-[var(--card)] p-4";
+  return failure === "denied" ? (
+    <div className={className}>{content}</div>
+  ) : (
+    <Link href={item.href} className={`${className} transition-all duration-150 hover:-translate-y-0.5 hover:border-[var(--foreground)]/20 hover:shadow-[0_6px_20px_-12px_rgba(0,0,0,0.25)]`}>{content}</Link>
   );
 }

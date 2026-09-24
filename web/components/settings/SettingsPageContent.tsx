@@ -12,6 +12,7 @@ import {
   settingsAnchorHref,
 } from "@/features/settings/navigation/settings-nav";
 import {
+  isKnownSettingsPage,
   settingsPageFamily,
   visibleSettingsPages,
 } from "@/features/settings/navigation/settings-pages";
@@ -231,18 +232,19 @@ export default function SettingsPageContent({ section }: { section: string }) {
       });
   }, [key, section, router]);
   if (!access.resolved) return loading();
-  if (settingsLoading) return loading();
   if (!page)
     return (
-      <div className="space-y-4">
+      <div role="alert" className="space-y-4">
         <h1 className="text-xl font-semibold">
-          {t("This settings page is unavailable.")}
+          {t(isKnownSettingsPage(key) ? "You do not have permission to access this settings page." : "This settings page is unavailable.")}
         </h1>
+        {isKnownSettingsPage(key) && <p>{t("Contact your administrator to request access.")}</p>}
         <Link href="/settings/general" className="text-sm underline">
           {t("Back to settings")}
         </Link>
       </div>
     );
+  if (settingsLoading) return loading();
   const Component = PAGES[key];
   const kind = AGENTS[key as keyof typeof AGENTS];
   return (

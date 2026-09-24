@@ -18,11 +18,12 @@ import {
  * so every surface reloads on the same signal the session list uses instead of
  * each keeping its own idea of what exists.
  */
-export function useChatWorkspaces() {
+export function useChatWorkspaces(enabled = true) {
   const [workspaces, setWorkspaces] = useState<ChatWorkspaceRegistration[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     const refresh = () =>
       void listWorkspaces(true)
@@ -40,7 +41,7 @@ export function useChatWorkspaces() {
       alive = false;
       unsubscribe();
     };
-  }, []);
+  }, [enabled]);
 
-  return { workspaces, error };
+  return { workspaces: enabled ? workspaces : [], error: enabled ? error : "" };
 }
