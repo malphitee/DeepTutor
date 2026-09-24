@@ -19,9 +19,20 @@ it('surfaces a rejected start as a terminal error instead of leaving the compose
   }))
 })
 
-it('surfaces a replay failure without declaring the backend turn finished', () => {
+it('surfaces a failed subscription as a terminal retryable error', () => {
   const onEvent = vi.fn()
   new UnifiedTurnClient(onEvent)
   fixture.receive({ type: 'protocol_error', protocol_version: '2.0', error_code: 'subscription_failed', message: 'Retry subscription', retryable: true, session_id: 'chat', turn_id: 'turn' })
-  expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', metadata: expect.objectContaining({ turn_terminal: false }) }))
+  expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', metadata: expect.objectContaining({ turn_terminal: true, status: 'failed', retryable: true }) }))
+})
+
+it('surfaces a scoped turn lookup failure as a terminal retryable error', () => {
+  const onEvent = vi.fn()
+  new UnifiedTurnClient(onEvent)
+  fixture.receive({ type: 'protocol_error', protocol_version: '2.0', error_code: 'turn_not_found', message: 'Turn not found.', retryable: false, session_id: 'chat', turn_id: 'turn' })
+  expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+    type: 'error',
+    content: 'Turn not found.',
+    metadata: expect.objectContaining({ turn_terminal: true, status: 'failed', retryable: true, reason: 'turn_not_found' }),
+  }))
 })
