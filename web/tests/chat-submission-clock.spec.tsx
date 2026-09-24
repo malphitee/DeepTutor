@@ -118,3 +118,25 @@ it("retains the connection error in the reply after transport closes", () => {
   act(() => transport.close?.());
   expect(screen.getByTestId("events")).toHaveTextContent("Connection lost while generating. Please retry your message.");
 });
+
+it("turns a silent homepage turn into a retryable terminal error", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-15T00:00:00Z"));
+  window.localStorage.removeItem("deeptutor.chatResponseTimeout");
+  render(<ChatStateAdapterProvider><Harness /></ChatStateAdapterProvider>);
+  await act(async () => {
+    fireEvent.click(screen.getByText("Send"));
+    await Promise.resolve();
+  });
+
+  // The first idle window has no server turn id to resume. The watchdog must
+  // settle the optimistic assistant bubble instead of touching it forever.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(191_000);
+  });
+
+  expect(screen.getByTestId("events")).toHaveTextContent(
+    '"error_code":"client_timeout"',
+  );
+  expect(screen.getByTestId("events")).toHaveTextContent('"retryable":true');
+});

@@ -1552,6 +1552,10 @@ export function ChatStateAdapterProvider({
   // assistant message if the server rejects the request (e.g. ``regenerate_busy``
   // or ``nothing_to_regenerate``). Keyed by session entry key.
   const pendingRegenerateRef = useRef<Map<string, MessageItem>>(new Map());
+  // A quiet turn gets one durable replay attempt. Keep this outside React
+  // state so a watchdog tick cannot schedule the same replay repeatedly while
+  // no stream event is arriving to cause a render.
+  const idleRecoveryAttemptsRef = useRef<Map<string, number>>(new Map());
   const traceCacheRef = useRef<TraceCache>(new TraceCache());
   const traceRequestsRef = useRef<Map<string, AbortController>>(new Map());
   // Forward-declared so ``handleRunnerEvent`` (created above
@@ -1590,6 +1594,7 @@ export function ChatStateAdapterProvider({
       runtimeGeneration.current += 1;
       runnersRef.current.forEach(({ client }) => client.disconnect());
       runnersRef.current.clear();
+      idleRecoveryAttemptsRef.current.clear();
       retryTimersRef.current.forEach((id) => clearTimeout(id));
       retryTimersRef.current.clear();
       traceRequestsRef.current.forEach((controller) => controller.abort());
@@ -1664,6 +1669,12 @@ export function ChatStateAdapterProvider({
     (runnerKey: string, event: StreamEvent) => {
       const runner = runnersRef.current.get(runnerKey);
       const effectiveKey = runner?.key || runnerKey;
+      // A real stream event proves the turn is making progress. Retryable
+      // protocol errors are deliberately excluded: a failed subscription
+      // must not reset the watchdog forever and keep the composer locked.
+      if (event.type !== "error") {
+        idleRecoveryAttemptsRef.current.delete(effectiveKey);
+      }
       // Reading tools ask the reader to act (scroll to a locator, show a mark
       // they just made) by tagging their result metadata. Re-broadcast it as a
       // DOM event so the reader pane can listen without the chat knowing it
@@ -1849,6 +1860,17 @@ export function ChatStateAdapterProvider({
           status: status as SessionRuntimeStatus,
           turnId: event.turn_id || null,
         });
+        // A terminal protocol error has no DONE frame for the transport to
+        // observe. Stop the runner here so its replay probe/reconnect loop
+        // cannot keep sending commands after the UI has settled the turn.
+        if (event.source === "transport") {
+          const terminalRunner = runnersRef.current.get(effectiveKey) || runner;
+          if (terminalRunner) {
+            terminalRunner.client.disconnect();
+            runnersRef.current.delete(effectiveKey);
+          }
+        }
+        idleRecoveryAttemptsRef.current.delete(effectiveKey);
       }
     },
     [moveRunner],
@@ -2249,10 +2271,9 @@ export function ChatStateAdapterProvider({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Idle recovery: if a streaming session receives no events for the
-  // configured window (default 180s, set in Settings > Network), re-subscribe
-  // from the last sequence. A quiet stream is not terminal: long research
-  // calls can emit nothing for minutes, while a dropped browser connection
-  // leaves the backend turn alive with replayable events.
+  // configured window (default 180s, set in Settings > Network), give it one
+  // replay from the last sequence. If that replay is also silent, surface a
+  // retryable terminal error instead of leaving the composer locked forever.
   useEffect(() => {
     const CHECK_INTERVAL_MS = 10_000;
 
@@ -2272,21 +2293,66 @@ export function ChatStateAdapterProvider({
           updatedAt: session.updatedAt,
           now: Date.now(),
           idleTimeoutMs,
+          recoveryAttempts: idleRecoveryAttemptsRef.current.get(key) ?? 0,
         });
         if (decision.kind === "none") continue;
 
         if (decision.kind === "resubscribe") {
-          // Avoid retrying on every watchdog tick while the re-subscription is
-          // opening. The next event will replace this timestamp naturally.
-          dispatch({ type: "STREAM_TOUCH", key });
-          sendThroughRunner(key, decision.message);
+          // Allow exactly one replay. Do not touch ``updatedAt`` here: if the
+          // replay is also silent, the next watchdog tick (rather than a
+          // second full timeout window) turns it into a terminal error.
+          idleRecoveryAttemptsRef.current.set(
+            key,
+            (idleRecoveryAttemptsRef.current.get(key) ?? 0) + 1,
+          );
+          void sendThroughRunner(key, decision.message);
           continue;
         }
 
-        // A local timeout cannot invent a terminal state. Mark the session as
-        // observed so the runtime/session reconciliation path can query the
-        // authoritative turn once the server supplies its id.
-        dispatch({ type: "STREAM_TOUCH", key });
+        const timeoutMessage = i18n.t(
+          "Agent response timed out. Please try again.",
+        );
+        dispatch({
+          type: "STREAM_EVENT",
+          key,
+          event: {
+            type: "error",
+            source: "client",
+            stage: "",
+            content: timeoutMessage,
+            turn_id: session.activeTurnId || undefined,
+            metadata: {
+              turn_terminal: true,
+              status: "failed",
+              error_code: "client_timeout",
+              retryable: true,
+            },
+            timestamp: Date.now() / 1000,
+          },
+        });
+        dispatch({
+          type: "STREAM_END",
+          key,
+          status: "failed",
+          turnId: session.activeTurnId,
+          errorMessage: timeoutMessage,
+        });
+        idleRecoveryAttemptsRef.current.delete(key);
+
+        // Stop a still-owned server turn before disconnecting so the Retry
+        // action does not immediately collide with an orphaned active turn.
+        const runner = runnersRef.current.get(key);
+        if (runner) {
+          if (runner.client.connected && session.activeTurnId) {
+            runner.client.send({
+              type: "cancel_turn",
+              turn_id: session.activeTurnId,
+            });
+          }
+          runner.client.disconnect();
+          runnersRef.current.delete(key);
+        }
+        notify(timeoutMessage, { tone: "error", durationMs: 6000 });
       }
     }, CHECK_INTERVAL_MS);
 
@@ -2478,6 +2544,7 @@ export function ChatStateAdapterProvider({
           parentMessageId: localParentId,
         });
       }
+      idleRecoveryAttemptsRef.current.delete(key);
       dispatch({ type: "STREAM_START", key, startedAt: Date.now() / 1000 });
       const {
         _persist_user_message: legacyPersistUserMessage,
@@ -2652,6 +2719,7 @@ export function ChatStateAdapterProvider({
       pendingRegenerateRef.current.delete(key);
     }
     dispatch({ type: "POP_LAST_ASSISTANT", key });
+    idleRecoveryAttemptsRef.current.delete(key);
     dispatch({ type: "STREAM_START", key, startedAt: Date.now() / 1000 });
     sendThroughRunner(key, {
       type: "regenerate",

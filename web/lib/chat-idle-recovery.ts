@@ -8,21 +8,23 @@ interface IdleTurnRecoveryInput {
   updatedAt: number;
   now: number;
   idleTimeoutMs: number;
+  /** Number of recovery attempts made without receiving another event. */
+  recoveryAttempts?: number;
 }
 
 export type IdleTurnRecoveryDecision =
   | { kind: "none" }
   | { kind: "resubscribe"; message: ReturnType<typeof buildResumeTurn> }
-  | { kind: "reconcile" };
+  | { kind: "fail" };
 
 /**
  * Decide what the client-side idle watchdog should do.
  *
  * A quiet WebSocket is not proof that a server turn failed. Long research
- * tool calls can legitimately emit nothing for several minutes, and the
- * backend keeps the turn alive when a browser briefly disconnects. When a
- * server turn id is known, re-subscribe from the last received sequence so
- * buffered events (including a missed terminal event) are replayed.
+ * tool calls can legitimately emit nothing, and the backend keeps the turn
+ * alive when a browser briefly disconnects. When a server turn id is known,
+ * allow one re-subscribe from the last received sequence so buffered events
+ * (including a missed terminal event) can be replayed before failing locally.
  */
 export function decideIdleTurnRecovery(
   input: IdleTurnRecoveryInput,
@@ -31,7 +33,13 @@ export function decideIdleTurnRecovery(
   if (input.now - input.updatedAt <= input.idleTimeoutMs) {
     return { kind: "none" };
   }
-  if (!input.activeTurnId) return { kind: "reconcile" };
+  // Give a turn with a known id one durable replay chance. If replay is also
+  // silent, the server has either lost the turn or stopped producing events;
+  // keeping the composer locked would be worse than surfacing a retryable
+  // failure. A turn without an id cannot be resumed at all.
+  if (!input.activeTurnId || (input.recoveryAttempts ?? 0) > 0) {
+    return { kind: "fail" };
+  }
   return {
     kind: "resubscribe",
     message: buildResumeTurn({
