@@ -1,4 +1,4 @@
-"""Contract tests for release-tag gating in publish workflows."""
+"""Contract tests for Docker release-tag gating."""
 
 from __future__ import annotations
 
@@ -18,10 +18,6 @@ RELEASE_WORKFLOWS = {
         REPOSITORY_ROOT / ".github" / "workflows" / "docker-release.yml",
         "build-and-push",
     ),
-    "pypi": (
-        REPOSITORY_ROOT / ".github" / "workflows" / "pypi-release.yml",
-        "build-and-publish",
-    ),
 }
 
 
@@ -32,11 +28,8 @@ def _workflow(publication: str) -> tuple[dict, str]:
 
 
 def _validator_script(publication: str) -> str:
-    if publication == "docker":
-        return (REPOSITORY_ROOT / "scripts/validate_image_release.py").read_text()
-    document, _ = _workflow(publication)
-    validator = document["jobs"]["validate-release-tag"]
-    return next(step["run"] for step in validator["steps"] if step.get("shell") == "python")
+    assert publication == "docker"
+    return (REPOSITORY_ROOT / "scripts/validate_image_release.py").read_text()
 
 
 def _run_validator(
@@ -49,28 +42,23 @@ def _run_validator(
     deleted: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     output = tmp_path / f"{publication}-output.txt"
-    if publication == "docker":
-        repository = tmp_path / "repository"
-        (repository / "scripts").mkdir(parents=True, exist_ok=True)
-        (repository / "deeptutor").mkdir(exist_ok=True)
-        script_path = repository / "scripts/validate_image_release.py"
-        script_path.write_text(_validator_script(publication))
-        try:
-            version = str(Version(tag.removeprefix("v")))
-        except InvalidVersion:
-            version = "1.2.3"
-        (repository / "deeptutor/__version__.py").write_text(f"__version__ = {version!r}\n")
-        command = [sys.executable, str(script_path)]
-    else:
-        # Actions executes shell: python from a temporary script outside the checkout.
-        script_path = tmp_path / "pypi-guard.py"
-        script_path.write_text(_validator_script(publication))
-        command = [sys.executable, str(script_path)]
+    assert publication == "docker"
+    repository = tmp_path / "repository"
+    (repository / "scripts").mkdir(parents=True, exist_ok=True)
+    (repository / "deeptutor").mkdir(exist_ok=True)
+    script_path = repository / "scripts/validate_image_release.py"
+    script_path.write_text(_validator_script(publication))
+    try:
+        version = str(Version(tag.removeprefix("v")))
+    except InvalidVersion:
+        version = "1.2.3"
+    (repository / "deeptutor/__version__.py").write_text(f"__version__ = {version!r}\n")
+    command = [sys.executable, str(script_path)]
     return subprocess.run(
         command,
         cwd=REPOSITORY_ROOT,
         env={
-            "GITHUB_EVENT_NAME": event or ("push" if publication == "docker" else "release"),
+            "GITHUB_EVENT_NAME": event or "push",
             "GITHUB_REF": ref or f"refs/tags/{tag}",
             "REF_DELETED": str(deleted).lower(),
             "RELEASE_TAG": tag,
@@ -88,14 +76,11 @@ def test_publication_events_are_guarded(publication: str) -> None:
     document, publish_job_name = _workflow(publication)
     validator = document["jobs"]["validate-release-tag"]
 
-    if publication == "docker":
-        assert validator["if"] == (
-            "github.repository == 'malphitee/DeepTutor' && "
-            "github.event_name == 'push' && !github.event.deleted && "
-            "startsWith(github.ref, 'refs/tags/v')"
-        )
-    else:
-        assert validator["if"] == "startsWith(github.event.release.tag_name, 'v')"
+    assert validator["if"] == (
+        "github.repository == 'malphitee/DeepTutor' && "
+        "github.event_name == 'push' && !github.event.deleted && "
+        "startsWith(github.ref, 'refs/tags/v')"
+    )
     assert document["jobs"][publish_job_name]["needs"] == "validate-release-tag"
 
 
@@ -106,9 +91,6 @@ def test_publication_events_are_guarded(publication: str) -> None:
         ("docker", "v1.2.3-beta.2"),
         ("docker", "v1.2.3-rc.1"),
         ("docker", "v1.2.3-alpha.1"),
-        ("pypi", "v1.2.3"),
-        ("pypi", "v1.2.3-rc.1"),
-        ("pypi", "v1.2.3-alpha.1"),
     ],
 )
 def test_version_release_tags_pass_the_guard(publication: str, tag: str, tmp_path: Path) -> None:
@@ -129,15 +111,6 @@ def test_version_release_tags_pass_the_guard(publication: str, tag: str, tmp_pat
         ("docker", "v1.2.3rc1"),
         ("docker", "v1.2.3+build.1"),
         ("docker", "v1.2.3-rc.01"),
-        ("pypi", "vmain"),
-        ("pypi", "v1.2"),
-        ("pypi", "v1.2.x"),
-        ("pypi", "v01.2.3"),
-        ("pypi", "v1.2.3+"),
-        ("pypi", "v1.2.3...."),
-        ("pypi", "v1.2.3rc1"),
-        ("pypi", "v1.2.3+build.1"),
-        ("pypi", "v1.2.3-rc.01"),
     ],
 )
 def test_malformed_version_tags_fail_the_guard(publication: str, tag: str, tmp_path: Path) -> None:
