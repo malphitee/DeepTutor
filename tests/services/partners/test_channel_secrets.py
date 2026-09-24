@@ -213,7 +213,7 @@ async def test_reload_failure_records_last_reload_error(monkeypatch):
         with pytest.raises(ValueError):
             await mgr.reload_channels("p")
         assert inst.last_reload_error is not None
-        assert "invalid telegram token format" in inst.last_reload_error
+        assert inst.last_reload_error == "Channel initialization failed (ValueError)."
         assert inst.channel_manager is None
     finally:
         sentinel.cancel()
