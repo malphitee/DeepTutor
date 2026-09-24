@@ -7,6 +7,8 @@ import { useTranslation } from 'react-i18next'
 import { SettingSection, SettingsPageHeader, inputClass, subPanelClass } from '@/components/settings/shared'
 import { WorkspaceResourcePicker } from '@/components/workspaces/WorkspaceResourcePicker'
 import { SystemWorkspaceSnapshot } from '@/components/workspaces/SystemWorkspaceSnapshot'
+import { WorkspaceAccessDenied } from '@/components/workspaces/WorkspaceAccessDenied'
+import { isApiError } from '@/lib/api'
 import {
   getWorkspaceCatalog, saveWorkspace, migrateWorkspace, workspaceChatHref, inheritedWorkspaceResources,
   type WorkspaceCatalog, type ChatWorkspaceRegistration,
@@ -87,18 +89,18 @@ export default function WorkspaceSettingsSection() {
   const [resources, setResources] = useState(inheritedWorkspaceResources)
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState<unknown>(null)
   const [notice, setNotice] = useState('')
   const refresh = useCallback(async () => {
     const next = await getWorkspaceCatalog()
     setCatalog(next)
     setRoot(next.root)
-    setError('')
+    setError(null)
   }, [])
-  useEffect(() => { void refresh().catch(err => setError(String(err.message))) }, [refresh])
+  useEffect(() => { void refresh().catch(setError) }, [refresh])
   const run: RunAction = async action => {
     setBusy(true)
-    setError('')
+    setError(null)
     setNotice('')
     try {
       await action()
@@ -106,16 +108,18 @@ export default function WorkspaceSettingsSection() {
       setNotice(t('Workspace updated.'))
       return true
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err)
       return false
     } finally { setBusy(false) }
   }
+  if (isApiError(error) && error.status === 403) return <WorkspaceAccessDenied />
+  const errorMessage = error ? (error instanceof Error ? error.message : String(error)) : ''
   return (
     <div>
       <SettingsPageHeader title={t('Workspaces')} description={t('Keep conversations, learning materials and progress together in one workspace.')} actions={
         <button type="button" disabled={busy || !catalog} onClick={() => setCreating(!creating)} className={primaryClass}><Plus size={15} />{t('New workspace')}</button>
       } />
-      {error && <div role="alert" className="mb-4 rounded-lg border border-[var(--destructive)] p-3 text-sm text-[var(--destructive)]">{error}{!catalog && <button className="ml-3 underline" onClick={() => void refresh().catch(err => setError(String(err.message)))}>{t('Retry')}</button>}</div>}
+      {errorMessage && <div role="alert" className="mb-4 rounded-lg border border-[var(--destructive)] p-3 text-sm text-[var(--destructive)]">{errorMessage}{!catalog && <button className="ml-3 underline" onClick={() => void refresh().catch(setError)}>{t('Retry')}</button>}</div>}
       {(busy || notice) && <p role="status" className="mb-4 text-sm text-[var(--muted-foreground)]">{busy ? t('Working. Migration copies and verifies your files; please wait…') : notice}</p>}
       {!catalog ? (!error && <div aria-busy="true" className="h-44 animate-pulse rounded-xl bg-[var(--muted)]" />) : (
         <fieldset disabled={busy} className="min-w-0 disabled:opacity-70">

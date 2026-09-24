@@ -16,6 +16,8 @@ import { useTranslation } from "react-i18next";
 import type { CodeBlockThemeId } from "@/components/common/code-block-themes";
 import {
   normalizeCodeBlockTheme,
+  hasStoredResponseLanguage,
+  readStoredResponseLanguage,
   writeStoredCodeBlockShowLineNumbers,
   writeStoredCodeBlockTheme,
   writeStoredCodeBlockWrapLongLines,
@@ -434,6 +436,7 @@ export type SettingsContextValue = {
   catalogEditable: boolean | null;
   settingsLoading: boolean;
   settingsError: string | null;
+  settingsErrorStatus: number | null;
   reloadSettings: () => Promise<void>;
   hasUnsavedChanges: boolean;
   theme: UiSettings["theme"];
@@ -603,16 +606,26 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   // also consumed by RichCodeBlock). Read the values from there and delegate
   // writes to its setters; this provider only adds backend persistence on top.
   const {
+    theme: shellTheme,
+    language: shellLanguage,
     codeBlockTheme,
     codeBlockShowLineNumbers,
     codeBlockWrapLongLines,
   } = useAppShell();
 
   const [status, setStatus] = useState<SystemStatus | null>(null);
-  const [theme, setTheme] = useState<UiSettings["theme"]>("snow");
-  const [language, setLanguage] = useState<UiSettings["language"]>("en");
-  const [responseLanguage, setResponseLanguage] =
-    useState<UiSettings["response_language"]>("en");
+  // Until authenticated preferences load, follow the shell, including its
+  // asynchronous locale bootstrap. A denied request must not reset these
+  // controls to English or publish default preferences over the browser's.
+  const [loadedTheme, setTheme] = useState<UiSettings["theme"] | null>(null);
+  const [loadedLanguage, setLanguage] = useState<UiSettings["language"] | null>(null);
+  const [loadedResponseLanguage, setResponseLanguage] =
+    useState<UiSettings["response_language"] | null>(null);
+  const theme = loadedTheme ?? shellTheme ?? "snow";
+  const language = loadedLanguage ?? shellLanguage ?? "en";
+  const responseLanguage = loadedResponseLanguage ?? (
+    hasStoredResponseLanguage() ? readStoredResponseLanguage() : language
+  );
   const [catalog, setCatalog] = useState<Catalog>(defaultCatalog());
   const [draft, setDraft] = useState<Catalog>(defaultCatalog());
   const [catalogEditable, setCatalogEditable] = useState<boolean | null>(null);
@@ -714,17 +727,23 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [syncPendingKeys]);
 
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsErrorStatus, setSettingsErrorStatus] = useState<number | null>(null);
 
   // Single load step. Kept separate from the mount effect so a "Retry" action
   // can re-run it without remounting the provider.
   const loadSettings = useCallback(async () => {
     setSettingsError(null);
-    let settingsLoaded = false;
+    setSettingsErrorStatus(null);
+    let loadSystemStatus = false;
     try {
       const settingsResponse = await apiFetch(apiUrl("/api/settings"));
       if (!settingsResponse.ok) {
+        setSettingsErrorStatus(settingsResponse.status);
+        const error = await settingsResponse.json().catch(() => ({}));
         throw new Error(
-          `Settings fetch failed: HTTP ${settingsResponse.status}`,
+          typeof error.detail === "string"
+            ? error.detail
+            : `Settings fetch failed: HTTP ${settingsResponse.status}`,
         );
       }
       const payload = (await settingsResponse.json()) as SettingsPayload;
@@ -800,14 +819,20 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         // No draft is the normal case and a failed read must not block the
         // page; the live settings above are already in hand.
       }
-      settingsLoaded = true;
+      loadSystemStatus = Boolean(payload.catalog);
     } catch (err) {
       console.error("Failed to load settings:", err);
       const message = err instanceof Error ? err.message : String(err);
       setSettingsError(message);
       // Resolve the loading gate so the page can render the error UI instead
       // of staying in an infinite skeleton state.
-      setCatalogEditable((current) => (current === null ? false : current));
+      setCatalogEditable(false);
+    }
+    // Personal settings do not depend on administrator runtime diagnostics.
+    // In particular, learning accounts intentionally cannot use that surface.
+    if (!loadSystemStatus) {
+      setStatus(null);
+      return;
     }
     try {
       const statusResponse = await apiFetch(apiUrl("/api/system/status"));
@@ -816,19 +841,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       console.error("Failed to load system status:", err);
-      // Only surface this when settings itself loaded; otherwise the
-      // settings-fetch error already explains the disconnect.
-      if (settingsLoaded) {
-        setSettingsError(
-          (current) =>
-            current ??
-            (err instanceof Error
-              ? t("System status unavailable: {{message}}", {
-                  message: err.message,
-                })
-              : t("System status unavailable.")),
-        );
-      }
+      setSettingsError(
+        (current) =>
+          current ??
+          (err instanceof Error
+            ? t("System status unavailable: {{message}}", {
+                message: err.message,
+              })
+            : t("System status unavailable.")),
+      );
     }
   }, [syncPendingKeys, t]);
 
@@ -2079,6 +2100,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       catalogEditable,
       settingsLoading,
       settingsError,
+      settingsErrorStatus,
       reloadSettings: loadSettings,
       hasUnsavedChanges,
       theme: editedUi.theme,
@@ -2188,6 +2210,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       saving,
       setActiveSection,
       settingsError,
+      settingsErrorStatus,
       loadSettings,
       settingsLoading,
       skipTour,

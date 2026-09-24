@@ -77,16 +77,20 @@ export interface SettingsCategory {
   href: string;
   /** Nested anchors (omitted for direct-section categories). */
   children?: SettingsLeaf[];
-  /** Shown only when the backend reports an active learner policy. */
+  /** Shown only for accounts with a self-service learner profile. */
   learnerOnly?: boolean;
-  /** Shown only to authenticated standard users who may act as guardians. */
+  /** Shown only to administrators. */
   guardianOnly?: boolean;
+  adminOnly?: boolean;
 }
+
+const SAFE_LEARNING_SETTINGS = new Set(["general", "appearance", "learner-profile"]);
 
 export function isSettingsLeafVisible(
   leaf: SettingsLeaf,
   access: SettingsAccess,
 ): boolean {
+  if (access.learningRestricted && !SAFE_LEARNING_SETTINGS.has(leaf.key)) return false;
   return !(leaf.adminOnly && access.hideAdminOnly);
 }
 
@@ -94,6 +98,8 @@ export function isSettingsCategoryVisible(
   category: SettingsCategory,
   access: SettingsAccess,
 ): boolean {
+  if (category.adminOnly && access.hideAdminOnly) return false;
+  if (access.learningRestricted && !category.children && !SAFE_LEARNING_SETTINGS.has(category.key)) return false;
   if (category.learnerOnly && !access.showLearnerOnly) return false;
   if (category.guardianOnly && !access.showGuardianOnly) return false;
   return (
@@ -115,6 +121,7 @@ export function visibleSettingsChildren(
 const MODEL_CHILDREN: SettingsLeaf[] = [
   {
     key: "voice",
+    adminOnly: true,
     href: "/settings/voice",
     label: { en: "Voice", zh: "语音" },
     blurb: {
@@ -126,6 +133,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "multimodal",
+    adminOnly: true,
     href: "/settings/multimodal",
     label: { en: "Multimodal generation", zh: "多模态生成" },
     blurb: {
@@ -137,6 +145,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "connections",
+    adminOnly: true,
     href: "/settings#connections",
     label: { zh: "提供方", en: "Providers" },
     blurb: {
@@ -148,6 +157,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "llm",
+    adminOnly: true,
     href: "/settings#llm",
     label: { zh: "语言模型", en: "Language models" },
     blurb: {
@@ -160,6 +170,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "task-models",
+    adminOnly: true,
     href: "/settings#task-models",
     label: { zh: "后台任务模型", en: "Task models" },
     blurb: {
@@ -171,6 +182,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "embedding",
+    adminOnly: true,
     href: "/settings#embedding",
     label: { zh: "嵌入模型", en: "Embedding models" },
     blurb: {
@@ -183,6 +195,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "search",
+    adminOnly: true,
     href: "/settings#search",
     label: { zh: "搜索", en: "Search" },
     blurb: { zh: "联网搜索供应商。", en: "Web search providers." },
@@ -192,6 +205,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "tts",
+    adminOnly: true,
     href: "/settings#tts",
     label: { zh: "语音合成", en: "Text-to-Speech" },
     blurb: {
@@ -204,6 +218,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "stt",
+    adminOnly: true,
     href: "/settings#stt",
     label: { zh: "语音识别", en: "Speech-to-Text" },
     blurb: {
@@ -216,6 +231,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "imagegen",
+    adminOnly: true,
     href: "/settings#imagegen",
     label: { zh: "文生图", en: "Image Generation" },
     blurb: {
@@ -228,6 +244,7 @@ const MODEL_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "videogen",
+    adminOnly: true,
     href: "/settings#videogen",
     label: { zh: "文生视频", en: "Video Generation" },
     blurb: {
@@ -255,6 +272,7 @@ const CHAT_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "tools",
+    adminOnly: true,
     href: "/settings#tools",
     label: { zh: "工具", en: "Tools" },
     blurb: {
@@ -266,6 +284,7 @@ const CHAT_CHILDREN: SettingsLeaf[] = [
   },
   {
     key: "capabilities",
+    adminOnly: true,
     href: "/settings#capabilities",
     label: { zh: "能力", en: "Capabilities" },
     blurb: {
@@ -435,6 +454,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   },
   {
     key: "network",
+    adminOnly: true,
     label: { zh: "网络", en: "Network" },
     blurb: {
       zh: "端口、浏览器 API 地址与 CORS",
@@ -466,6 +486,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   },
   {
     key: "knowledge",
+    adminOnly: true,
     label: { zh: "知识库", en: "Knowledge Base" },
     blurb: { zh: "文档解析引擎", en: "Document parsing engine" },
     icon: Library,
@@ -506,6 +527,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   },
   {
     key: "guardian",
+    adminOnly: true,
     guardianOnly: true,
     label: { zh: "监护管理", en: "Guardian" },
     blurb: {
@@ -527,6 +549,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   },
   {
     key: "about",
+    adminOnly: true,
     label: { zh: "关于", en: "About" },
     blurb: {
       zh: "版本、更新与项目资源",

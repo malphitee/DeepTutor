@@ -21,11 +21,14 @@ export function SettingsAccessProvider({
 
   useEffect(() => {
     let cancelled = false;
-    void fetchAuthStatus().then((authStatus) => {
+    const refresh = () => void fetchAuthStatus().then((authStatus) => {
       if (!cancelled) setAccess(settingsAccessFromAuthStatus(authStatus));
     });
+    refresh();
+    window.addEventListener("focus", refresh);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", refresh);
     };
   }, []);
 

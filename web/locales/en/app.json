@@ -5009,5 +5009,19 @@
   "Could not reach the server": "Could not reach the server",
   "Password must be at least 8 characters": "Password must be at least 8 characters",
   "Enter a valid email address": "Enter a valid email address",
-  "Invalid invitation pagination": "Invalid invitation pagination"
+  "Invalid invitation pagination": "Invalid invitation pagination",
+  "These settings are managed by your administrator.": "These settings are managed by your administrator.",
+  "Sign in to load your personal settings.": "Sign in to load your personal settings.",
+  "Your account cannot access these settings. Contact your administrator to review your access.": "Your account cannot access these settings. Contact your administrator to review your access.",
+  "Your session may have expired. Sign in again, then retry.": "Your session may have expired. Sign in again, then retry.",
+  "You do not have permission to access this settings page.": "You do not have permission to access this settings page.",
+  "You do not have permission to access this page.": "You do not have permission to access this page.",
+  "Unable to verify your access. Please try again.": "Unable to verify your access. Please try again.",
+  "Workspaces are managed by your administrator": "Workspaces are managed by your administrator",
+  "Your account cannot manage workspace folders or resources. Contact your administrator to request access.": "Your account cannot manage workspace folders or resources. Contact your administrator to request access.",
+  "Personal settings": "Personal settings",
+  "Some resources are managed by your administrator. Contact them to request access.": "Some resources are managed by your administrator. Contact them to request access.",
+  "Some resources could not be loaded. Try again or contact your administrator for help.": "Some resources could not be loaded. Try again or contact your administrator for help.",
+  "Managed by your administrator": "Managed by your administrator",
+  "Contact your administrator to request access.": "Contact your administrator to request access."
 }

@@ -5009,5 +5009,19 @@
   "Could not reach the server": "无法连接服务器，请检查网络后重试。",
   "Password must be at least 8 characters": "密码至少需要 8 个字符。",
   "Enter a valid email address": "请输入有效的邮箱地址。",
-  "Invalid invitation pagination": "邀请码分页参数无效。"
+  "Invalid invitation pagination": "邀请码分页参数无效。",
+  "These settings are managed by your administrator.": "这些设置由管理员管理。",
+  "Sign in to load your personal settings.": "请登录以加载个人设置。",
+  "Your account cannot access these settings. Contact your administrator to review your access.": "此账号无法访问这些设置。请联系管理员检查访问权限。",
+  "Your session may have expired. Sign in again, then retry.": "登录状态可能已过期，请重新登录后重试。",
+  "You do not have permission to access this settings page.": "你没有权限访问此设置页面。",
+  "You do not have permission to access this page.": "你没有权限访问此页面。",
+  "Unable to verify your access. Please try again.": "无法验证你的访问权限，请重试。",
+  "Workspaces are managed by your administrator": "工作区由管理员管理",
+  "Your account cannot manage workspace folders or resources. Contact your administrator to request access.": "此账号无法管理工作区文件夹或资源。如需访问，请联系管理员。",
+  "Personal settings": "个人设置",
+  "Some resources are managed by your administrator. Contact them to request access.": "部分资源由管理员管理。如需访问，请联系管理员。",
+  "Some resources could not be loaded. Try again or contact your administrator for help.": "部分资源加载失败。请重试，或联系管理员获取帮助。",
+  "Managed by your administrator": "由管理员管理",
+  "Contact your administrator to request access.": "请联系管理员申请访问权限。"
 }

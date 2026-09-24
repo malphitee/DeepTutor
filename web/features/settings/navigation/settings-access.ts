@@ -1,4 +1,5 @@
 import type { AuthStatus } from "@/lib/auth";
+import { effectiveLearningPolicy, isAdministrator } from "@/lib/learning-access";
 
 export interface SettingsAccess {
   /** False until the backend has resolved the runtime auth mode and account. */
@@ -7,8 +8,10 @@ export interface SettingsAccess {
   hideAdminOnly: boolean;
   /** The self-service learner profile belongs only to learner accounts. */
   showLearnerOnly: boolean;
-  /** Ordinary standard/custom accounts may act as authorized guardians. */
+  /** Guardian management is an administrator surface. */
   showGuardianOnly: boolean;
+  /** Effective policy restricts settings to safe personal preferences. */
+  learningRestricted?: boolean;
 }
 
 export const PENDING_SETTINGS_ACCESS: SettingsAccess = {
@@ -16,6 +19,7 @@ export const PENDING_SETTINGS_ACCESS: SettingsAccess = {
   hideAdminOnly: true,
   showLearnerOnly: false,
   showGuardianOnly: false,
+  learningRestricted: true,
 };
 
 /** Convert the backend's account identity into the settings visibility model. */
@@ -26,16 +30,13 @@ export function settingsAccessFromAuthStatus(
     return { ...PENDING_SETTINGS_ACCESS, resolved: true };
   }
 
-  const ordinaryAuthenticatedUser = Boolean(
-    authStatus.enabled && authStatus.authenticated && !authStatus.is_admin,
-  );
+  const admin = isAdministrator(authStatus);
+  const learningRestricted = Boolean(effectiveLearningPolicy(authStatus));
   return {
     resolved: true,
-    hideAdminOnly: Boolean(authStatus.enabled) && !authStatus.is_admin,
-    showLearnerOnly:
-      ordinaryAuthenticatedUser && authStatus.preset === "learner",
-    showGuardianOnly:
-      ordinaryAuthenticatedUser &&
-      (authStatus.preset === "standard" || authStatus.preset === "custom"),
+    hideAdminOnly: !admin,
+    showLearnerOnly: Boolean(authStatus.enabled && authStatus.authenticated && !admin && authStatus.preset === "learner"),
+    showGuardianOnly: admin,
+    learningRestricted,
   };
 }

@@ -1,4 +1,4 @@
-import { apiFetch, apiUrl } from '@/lib/api'
+import { apiUrl, requestJson } from '@/lib/api'
 import { invalidateClientCache, withClientCache } from '@/lib/client-cache'
 import { notifySessionsChanged } from '@/lib/session-events'
 
@@ -46,10 +46,7 @@ export interface ChatWorkspaceRegistration {
 const endpoint = '/api/settings/workspace/registrations'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await apiFetch(apiUrl(url), init)
-  const payload = await response.json()
-  if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status})`)
-  return payload as T
+  return requestJson<T>(apiUrl(url), { ...init, scope: 'settings' })
 }
 
 export function listWorkspaces(force = false): Promise<ChatWorkspaceRegistration[]> {

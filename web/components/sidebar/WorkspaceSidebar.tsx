@@ -1,5 +1,8 @@
 "use client";
 
+import { canAccessLearningPath } from "@/lib/learning-access";
+import { READING_HOME } from "@/lib/learning-routes";
+import { useLearningAccess } from "@/hooks/useLearningAccess";
 import { navigateTask, selectWorkspace } from "@/lib/workspace-scope";
 import { sessionWorkspaceId } from "@/lib/session-api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -36,6 +39,7 @@ import { subscribeSessionChanges } from "@/lib/session-events";
 export default function WorkspaceSidebar() {
   const { t } = useTranslation();
   const router = useRouter();
+  const access = useLearningAccess();
   const {
     newSession,
     configureSession,
@@ -54,6 +58,7 @@ export default function WorkspaceSidebar() {
   const hasLoadedSessionsRef = useRef(false);
 
   const refreshSessions = useCallback(async () => {
+    if (!access.resolved || !access.statusAvailable) return;
     if (!hasLoadedSessionsRef.current) {
       setLoadingSessions(true);
     }
@@ -63,10 +68,10 @@ export default function WorkspaceSidebar() {
       // as ungrouped rather than as missing.
       const [nextSessions, nextCourses, nextTopics, nextCollections] =
         await Promise.all([
-          listAllSessions({ force: true, allWorkspaces: true }),
-          listCourses({ force: true }).catch(() => [] as StudyCourse[]),
-          fetchMasteryTopicIndex().catch(() => [] as MasteryTopicLabel[]),
-          fetchReadingCollectionIndex().catch(() => [] as ReadingCollectionLabel[]),
+          canAccessLearningPath("/chat", access.policy) ? listAllSessions({ force: true, allWorkspaces: true }) : [],
+          access.policy ? [] : listCourses({ force: true }).catch(() => [] as StudyCourse[]),
+          access.policy ? [] : fetchMasteryTopicIndex().catch(() => [] as MasteryTopicLabel[]),
+          canAccessLearningPath(READING_HOME, access.policy) ? fetchReadingCollectionIndex().catch(() => [] as ReadingCollectionLabel[]) : [],
         ]);
       setSessions(nextSessions);
       setCourses(nextCourses);
@@ -78,7 +83,7 @@ export default function WorkspaceSidebar() {
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [access.resolved, access.statusAvailable, access.policy]);
 
   // First mount shows the skeleton; subsequent refreshes triggered by
   // ``sidebarRefreshToken`` (STREAM_END, server-side session bind,

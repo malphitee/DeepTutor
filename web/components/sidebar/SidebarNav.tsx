@@ -1,5 +1,7 @@
 "use client";
 
+import { useLearningAccess } from "@/hooks/useLearningAccess";
+import { canAccessLearningPath } from "@/lib/learning-access";
 import { browserStorage } from "@/shared/storage";
 
 /**
@@ -43,6 +45,7 @@ import {
   DEFAULT_COLLAPSED_NAV,
   PRIMARY_NAV_HREFS,
   isNavActive,
+  primaryNavForPolicy,
 } from "@/components/sidebar/nav-entries";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { useDragSort, type DragSort } from "@/hooks/useDragSort";
@@ -55,8 +58,6 @@ import {
   writeNavLayout,
   type SidebarNavLayout,
 } from "@/lib/sidebar-layout";
-
-const MODULE_NAV_HREFS = PRIMARY_NAV_HREFS.filter((href) => href !== "/chat");
 
 const MORE_EXPANDED_KEY = "deeptutor.sidebar.moreExpanded";
 /** One curve and one duration for every part of the "More" disclosure, so the
@@ -92,6 +93,7 @@ export function SidebarNav({
   const pathname = usePathname() ?? "";
   const { t } = useTranslation();
   const { has } = useCapabilityAccess();
+  const access = useLearningAccess();
 
   const [layout, setLayout] = useState<SidebarNavLayout | null>(null);
   const [moreExpanded, setMoreExpanded] = useState(false);
@@ -110,8 +112,13 @@ export function SidebarNav({
   }, []);
 
   const resolved = useMemo(
-    () => resolveNavLayout(MODULE_NAV_HREFS, layout, DEFAULT_COLLAPSED_NAV),
-    [layout],
+    () => resolveNavLayout(
+      access.resolved && access.statusAvailable
+        ? primaryNavForPolicy(access.policy).filter(entry => entry.href !== "/chat").map(entry => entry.href)
+        : [],
+      layout, DEFAULT_COLLAPSED_NAV,
+    ),
+    [access.resolved, access.statusAvailable, access.policy, layout],
   );
   /** Always edit the resolved order: the stored one may still be empty. */
   const editable = useMemo<SidebarNavLayout>(
@@ -525,6 +532,8 @@ export function SidebarHome({
   const { t } = useTranslation();
   const pathname = usePathname() ?? "";
   const { has } = useCapabilityAccess();
+  const access = useLearningAccess();
+  if (!access.resolved || !access.statusAvailable || !canAccessLearningPath("/chat", access.policy)) return null;
   const entry = NAV_BY_HREF.get("/chat")!;
   const active = isNavActive(pathname, entry.href);
   const locked = entry.requires ? !has(entry.requires) : false;
