@@ -26,6 +26,7 @@ function LoginPageContent() {
 
   const registered = searchParams?.get("registered") === "1";
   const invited = registered && searchParams?.get("invite") === "1";
+  const passwordChanged = searchParams?.get("password_changed") === "1";
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -74,6 +75,12 @@ function LoginPageContent() {
           {t("Sign in to your account")}
         </p>
       </div>
+
+      {passwordChanged && (
+        <div role="status" className="mb-4 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-600 dark:text-green-400">
+          {t("Password updated. All sessions have been signed out. Sign in with your new password.")}
+        </div>
+      )}
 
       {/* Registered success notice */}
       {registered && (

@@ -45,7 +45,7 @@ test("a paused ask-user turn is not touched by the idle watchdog", () => {
   );
 });
 
-test("a stale stream without a server turn id requests reconciliation", () => {
+test("a stale stream without a server turn id fails locally", () => {
   const decision = decideIdleTurnRecovery({
     isStreaming: true,
     hasPendingUserInput: false,
@@ -56,7 +56,22 @@ test("a stale stream without a server turn id requests reconciliation", () => {
     idleTimeoutMs: 180_000,
   });
 
-  assert.equal(decision.kind, "reconcile");
+  assert.equal(decision.kind, "fail");
+});
+
+test("a second quiet window after replay fails instead of looping forever", () => {
+  const decision = decideIdleTurnRecovery({
+    isStreaming: true,
+    hasPendingUserInput: false,
+    activeTurnId: "turn_quiet",
+    lastSeq: 4,
+    updatedAt: 1_000,
+    now: 181_001,
+    idleTimeoutMs: 180_000,
+    recoveryAttempts: 1,
+  });
+
+  assert.equal(decision.kind, "fail");
 });
 
 /* ── Opening a conversation the backend never closed out ────────────────

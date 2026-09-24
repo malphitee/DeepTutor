@@ -366,6 +366,26 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/auth/profile/password": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Change Profile Password
+     * @description Change the authenticated account's own password and require a fresh login.
+     */
+    readonly post: operations["change_profile_password_api_auth_profile_password_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/auth/register": {
     readonly parameters: {
       readonly query?: never;
@@ -10557,6 +10577,13 @@ export interface components {
         readonly [key: string]: unknown;
       } | null;
     };
+    /** ChangePasswordRequest */
+    readonly ChangePasswordRequest: {
+      /** Current Password */
+      readonly current_password: string;
+      /** New Password */
+      readonly new_password: string;
+    };
     /** ChannelOnboardingStartRequest */
     readonly ChannelOnboardingStartRequest: {
       /**
@@ -13093,6 +13120,43 @@ export interface components {
       /** Server Url */
       readonly server_url: string;
     };
+    /** ProfileInfo */
+    readonly ProfileInfo: {
+      /**
+       * Avatar
+       * @default
+       */
+      readonly avatar: string;
+      /** Created At */
+      readonly created_at: string;
+      /**
+       * Disabled
+       * @default false
+       */
+      readonly disabled: boolean;
+      /**
+       * Id
+       * @default
+       */
+      readonly id: string;
+      /**
+       * Password Change Supported
+       * @default false
+       */
+      readonly password_change_supported: boolean;
+      /** Password Change Unavailable Reason */
+      readonly password_change_unavailable_reason?: string | null;
+      /**
+       * Preset
+       * @default standard
+       * @enum {string}
+       */
+      readonly preset: "standard" | "learner" | "custom";
+      /** Role */
+      readonly role: string;
+      /** Username */
+      readonly username: string;
+    };
     /** ProviderEditPayload */
     readonly ProviderEditPayload: {
       /**
@@ -15221,6 +15285,8 @@ export type SchemaCategoryRenameRequest =
   components["schemas"]["CategoryRenameRequest"];
 export type SchemaChangeBlockTypeRequest =
   components["schemas"]["ChangeBlockTypeRequest"];
+export type SchemaChangePasswordRequest =
+  components["schemas"]["ChangePasswordRequest"];
 export type SchemaChannelOnboardingStartRequest =
   components["schemas"]["ChannelOnboardingStartRequest"];
 export type SchemaChapterImport = components["schemas"]["ChapterImport"];
@@ -15476,6 +15542,7 @@ export type SchemaProbeLightRagServerRequest =
   components["schemas"]["ProbeLightRagServerRequest"];
 export type SchemaProbeWeKnoraRequest =
   components["schemas"]["ProbeWeKnoraRequest"];
+export type SchemaProfileInfo = components["schemas"]["ProfileInfo"];
 export type SchemaProviderEditPayload =
   components["schemas"]["ProviderEditPayload"];
 export type SchemaProviderModeUpdate =
@@ -16207,7 +16274,7 @@ export interface operations {
           readonly [name: string]: unknown;
         };
         content: {
-          readonly "application/json": components["schemas"]["UserInfo"];
+          readonly "application/json": components["schemas"]["ProfileInfo"];
         };
       };
       /** @description Validation Error */
@@ -16395,6 +16462,43 @@ export interface operations {
           readonly "application/json": {
             readonly [key: string]: unknown;
           };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly change_profile_password_api_auth_profile_password_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["ChangePasswordRequest"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": unknown;
         };
       };
       /** @description Validation Error */

@@ -67,11 +67,14 @@ from deeptutor.services.auth import (
     AUTH_ENABLED,
     POCKETBASE_ENABLED,
     TOKEN_EXPIRE_HOURS,
+    PasswordChangeError,
+    StaleAuthenticationError,
     TokenPayload,
     account_by_id,
     authenticate,
     authenticate_device,
     authenticate_pb,
+    change_password,
     create_token,
     decode_token,
     delete_user,
@@ -83,6 +86,7 @@ from deeptutor.services.auth import (
     set_disabled,
     set_learner_profile,
     set_role,
+    validate_new_password,
 )
 from deeptutor.services.auth import (
     get_learner_profile as load_learner_profile,
@@ -195,11 +199,24 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_valid(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        if len(v.encode("utf-8")) > 72:
+        return validate_new_password(v)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = Field(max_length=72)
+
+    @field_validator("current_password")
+    @classmethod
+    def current_password_valid(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
             raise ValueError("Password must be at most 72 UTF-8 bytes")
-        return v
+        return value
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_valid(cls, value: str) -> str:
+        return validate_new_password(value)
 
 
 class InviteCreateRequest(BaseModel):
@@ -267,6 +284,11 @@ class UserInfo(BaseModel):
     disabled: bool = False
     avatar: str = ""
     preset: AccountPreset = "standard"
+
+
+class ProfileInfo(UserInfo):
+    password_change_supported: bool = False
+    password_change_unavailable_reason: str | None = None
 
 
 class LearnerProfileRequest(BaseModel):
@@ -613,6 +635,24 @@ def _learning_surface_for_path(path: str) -> str:
     return ""
 
 
+# Personal preferences remain available even when a learning policy only
+# exposes Reading. Match methods and complete paths: granting /settings as a
+# prefix would also expose providers, tools, workspace migration and exports.
+_LEARNING_PERSONAL_SETTINGS_ROUTES = frozenset(
+    {
+        ("GET", "/api/settings"),
+        ("PUT", "/api/settings/ui"),
+        ("PUT", "/api/settings/theme"),
+        ("PUT", "/api/settings/language"),
+        ("PUT", "/api/settings/voice-autoplay"),
+        ("GET", "/api/settings/themes"),
+        ("GET", "/api/settings/draft"),
+        ("PUT", "/api/settings/draft"),
+        ("DELETE", "/api/settings/draft"),
+    }
+)
+
+
 async def require_learning_surface(
     request: Request,
     _: TokenPayload | None = Depends(require_auth),
@@ -620,6 +660,11 @@ async def require_learning_surface(
     """Second-stage default-deny guard for configured learning accounts."""
     from deeptutor.multi_user.learning_access import assert_learning_surface
 
+    if (request.method, request.url.path) in _LEARNING_PERSONAL_SETTINGS_ROUTES:
+        # Authentication has already installed the caller's private scope.
+        # The draft handlers separately restrict learning accounts to validated
+        # interface preferences and, for learner presets, their own profile.
+        return
     try:
         assert_learning_surface(_learning_surface_for_path(request.url.path))
     except PermissionError as exc:
@@ -766,7 +811,15 @@ async def login(body: LoginRequest, response: Response) -> dict:
             detail="Incorrect username or password",
         )
 
-    token = create_token(result.username, result.role, result.user_id)
+    try:
+        token = create_token(
+            result.username,
+            result.role,
+            result.user_id,
+            expected_token_version=result.token_version,
+        )
+    except StaleAuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     response.set_cookie(value=token, max_age=_COOKIE_MAX_AGE, **_cookie_attrs())
 
     logger.info(f"User '{result.username}' logged in (role={result.role!r})")
@@ -1076,23 +1129,72 @@ def _require_profile_identity(payload: TokenPayload | None) -> TokenPayload:
     return payload
 
 
-@router.get("/profile", response_model=UserInfo)
+@router.get("/profile", response_model=ProfileInfo)
 async def get_profile(
     payload: TokenPayload | None = Depends(require_auth),
-) -> UserInfo:
+) -> ProfileInfo:
     """Return the current user's own account info."""
     current = _require_profile_identity(payload)
     info = get_user_info(current.username)
+    unavailable_reason = (
+        "external_auth"
+        if POCKETBASE_ENABLED or info is None
+        else "environment_admin"
+        if current.user_id == "env-admin"
+        else None
+    )
     if info is None:
         # PocketBase-backed identities have no local record; fall back to the
         # token claims so the profile page still renders.
-        return UserInfo(
+        return ProfileInfo(
             id=current.user_id,
             username=current.username,
             role=current.role,
             created_at="",
+            password_change_unavailable_reason=unavailable_reason,
         )
-    return UserInfo(**info)
+    return ProfileInfo(
+        **info,
+        password_change_supported=unavailable_reason is None,
+        password_change_unavailable_reason=unavailable_reason,
+    )
+
+
+@router.post("/profile/password", response_model=None)
+async def change_profile_password(
+    body: ChangePasswordRequest,
+    response: Response,
+    payload: TokenPayload | None = Depends(require_auth),
+) -> dict | JSONResponse:
+    """Change the authenticated account's own password and require a fresh login."""
+    if not AUTH_ENABLED or payload is None or POCKETBASE_ENABLED or payload.user_id == "env-admin":
+        return _registration_error(
+            "password_change_unsupported",
+            "Password changes are only available for stored built-in accounts.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        await run_in_threadpool(change_password, payload, body.current_password, body.new_password)
+    except PasswordChangeError as exc:
+        code, detail = {
+            "current_password_incorrect": (400, "Current password is incorrect."),
+            "session_expired": (401, "Your session has expired. Sign in again."),
+            "password_change_unsupported": (
+                400,
+                "Password changes are unavailable for this account.",
+            ),
+        }[exc.code]
+        return _registration_error(exc.code, detail, code)
+    except IdentityStoreError:
+        return _registration_error(
+            "account_storage_unavailable",
+            "Account storage is temporarily unavailable.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    await terminate_revoked_user(payload.user_id, previous_role=payload.role)
+    response.delete_cookie(**_cookie_attrs())
+    response.headers["Cache-Control"] = "no-store"
+    return {"ok": True, "reauthenticate": True}
 
 
 @router.put("/profile")

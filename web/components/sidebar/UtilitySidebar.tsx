@@ -1,5 +1,8 @@
 "use client";
 
+import { canAccessLearningPath } from "@/lib/learning-access";
+import { READING_HOME } from "@/lib/learning-routes";
+import { useLearningAccess } from "@/hooks/useLearningAccess";
 import { navigateTask } from "@/lib/workspace-scope";
 import { sessionWorkspaceId } from "@/lib/session-api";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -33,6 +36,7 @@ import { subscribeSessionChanges } from "@/lib/session-events";
 export default function UtilitySidebar() {
   const { t } = useTranslation();
   const router = useRouter();
+  const access = useLearningAccess();
   const { activeSessionId, setActiveSessionId } = useAppShell();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [courses, setCourses] = useState<StudyCourse[]>([]);
@@ -44,6 +48,7 @@ export default function UtilitySidebar() {
   const hasLoadedSessionsRef = useRef(false);
 
   const refreshSessions = useCallback(async () => {
+    if (!access.resolved || !access.statusAvailable) return;
     if (!hasLoadedSessionsRef.current) {
       setLoadingSessions(true);
     }
@@ -51,10 +56,10 @@ export default function UtilitySidebar() {
       // Labels only name a heading, so losing them costs grouping, not the list.
       const [nextSessions, nextCourses, nextTopics, nextCollections] =
         await Promise.all([
-          listSessions(50, 0, { force: true, allWorkspaces: true }),
-          listCourses({ force: true }).catch(() => [] as StudyCourse[]),
-          fetchMasteryTopicIndex().catch(() => [] as MasteryTopicLabel[]),
-          fetchReadingCollectionIndex().catch(() => [] as ReadingCollectionLabel[]),
+          canAccessLearningPath("/chat", access.policy) ? listSessions(50, 0, { force: true, allWorkspaces: true }) : [],
+          access.policy ? [] : listCourses({ force: true }).catch(() => [] as StudyCourse[]),
+          access.policy ? [] : fetchMasteryTopicIndex().catch(() => [] as MasteryTopicLabel[]),
+          canAccessLearningPath(READING_HOME, access.policy) ? fetchReadingCollectionIndex().catch(() => [] as ReadingCollectionLabel[]) : [],
         ]);
       setSessions(nextSessions);
       setCourses(nextCourses);
@@ -66,7 +71,7 @@ export default function UtilitySidebar() {
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [access.resolved, access.statusAvailable, access.policy]);
 
   useEffect(() => {
     void refreshSessions();

@@ -8,6 +8,7 @@ import {
   cancelChannelOnboarding,
   getChannelOnboarding,
   getPartnerChannelRuntime,
+  reloadPartnerChannels,
   startChannelOnboarding,
   supportsChannelOnboarding,
 } from "../lib/partners-api";
@@ -63,7 +64,7 @@ test("QR action controls are rendered with a non-null onboarding session", () =>
 
 test("channel runtime setup output is rendered in the WebUI", () => {
   assert.match(runtimeStatusSource, /setup\.qr_data_url/);
-  assert.match(runtimeStatusSource, /setup\.message/);
+  assert.match(runtimeStatusSource, /setup\??\.message/);
   assert.match(runtimeStatusSource, /getPartnerChannelRuntime/);
   assert.match(runtimeStatusSource, /Listener running/);
   assert.match(runtimeStatusSource, /Configuration required/);
@@ -114,6 +115,22 @@ test("channel runtime client reads the partner-scoped status endpoint", async ()
       {
         method: "GET",
         url: "/api/partners/partner%20id/channels/status?dt_workspace=",
+        body: undefined,
+      },
+    ]);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("channel runtime retry calls the partner-scoped reload endpoint", async () => {
+  const stub = stubFetch({ partner_id: "p", reloaded: true });
+  try {
+    await reloadPartnerChannels("partner id");
+    assert.deepEqual(stub.calls, [
+      {
+        method: "POST",
+        url: "/api/partners/partner%20id/channels/reload?dt_workspace=",
         body: undefined,
       },
     ]);

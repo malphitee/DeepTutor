@@ -18,13 +18,14 @@ from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
 from deeptutor.multi_user.context import get_current_user, request_scope_active
-from deeptutor.multi_user.paths import get_admin_path_service
+from deeptutor.multi_user.learning_access import current_learning_policy
 from deeptutor.multi_user.model_access import allowed_llm_options
+from deeptutor.multi_user.paths import get_admin_path_service
 from deeptutor.services.codebuddy_auth import get_codebuddy_auth_service
 from deeptutor.services.codex_auth import (
     CodexAuthError,
@@ -174,6 +175,41 @@ class UISettingsUpdate(BaseModel):
     code_block_theme: str | None = None
     code_block_show_line_numbers: bool | None = None
     code_block_wrap_long_lines: bool | None = None
+
+
+def _settings_ui_payload() -> dict[str, Any]:
+    settings = load_ui_settings()
+    if current_learning_policy() is None:
+        return settings
+    # Learning accounts receive their presentation preferences, without stale
+    # tool choices or other configuration saved before the policy took effect.
+    fields = {*UISettingsUpdate.model_fields, "voice_autoplay", "chat_response_timeout"}
+    return {key: value for key, value in settings.items() if key in fields}
+
+
+def _learning_draft_models() -> dict[str, type[BaseModel]]:
+    from deeptutor.api.routers.auth import LearnerProfileRequest
+    from deeptutor.multi_user.identity import get_user_by_id
+
+    models: dict[str, type[BaseModel]] = {"ui": UISettingsUpdate}
+    record = get_user_by_id(get_current_user().id)
+    # Profile storage and its own endpoint require the learner preset. A
+    # standard account with a policy still has personal interface preferences.
+    if record is not None and record[1].get("preset") == "learner":
+        models["learner-profile"] = LearnerProfileRequest
+    return models
+
+
+def _learning_draft_projection(draft: dict[str, Any]) -> dict[str, Any]:
+    """Hide pre-policy configuration while keeping personal preference drafts."""
+    safe_extensions = {}
+    for key, model in _learning_draft_models().items():
+        payload = draft.get("extensions", {}).get(key)
+        if isinstance(payload, dict):
+            safe_extensions[key] = {
+                field: value for field, value in payload.items() if field in model.model_fields
+            }
+    return {**draft, "catalog": None, "extensions": safe_extensions}
 
 
 class VoiceAutoplayUpdate(BaseModel):
@@ -854,7 +890,7 @@ async def get_settings():
     if not user.is_admin:
         # Non-admins never see the catalog (provider URLs/keys); their model
         # choices come from /settings/llm-options (grant-filtered).
-        return {"ui": load_ui_settings()}
+        return {"ui": _settings_ui_payload()}
     from deeptutor.services.model_selection.tasks import task_kind_payload
 
     return {
@@ -1711,6 +1747,8 @@ async def get_settings_draft():
     between saving a draft and applying it.
     """
     draft = get_settings_draft_service().load()
+    if current_learning_policy() is not None:
+        draft = _learning_draft_projection(draft)
     if is_empty_draft(draft):
         return {"draft": None}
     return {"draft": redact_draft(draft)}
@@ -1718,6 +1756,47 @@ async def get_settings_draft():
 
 @router.put("/draft")
 async def update_settings_draft(payload: SettingsDraftPayload):
+    if current_learning_policy() is not None:
+        models = _learning_draft_models()
+        if payload.catalog is not None or set(payload.extensions) - models.keys():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This learning account can only save personal preferences.",
+            )
+        extensions = {}
+        for key, value in payload.extensions.items():
+            model = models[key]
+            if key == "learner-profile" and isinstance(value, dict):
+                # Profile reads include server-owned schema metadata; the
+                # editor sends it back alongside the editable fields.
+                value = {field: item for field, item in value.items() if field != "schema_version"}
+            if isinstance(value, dict) and set(value) - model.model_fields.keys():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This learning account can only save personal preferences.",
+                )
+            try:
+                extensions[key] = model.model_validate(value).model_dump(exclude_unset=True)
+                if key == "learner-profile":
+                    from deeptutor.multi_user.learner_profile import normalize_profile
+
+                    normalized = normalize_profile(extensions[key]) or {}
+                    extensions[key] = {
+                        field: item
+                        for field, item in normalized.items()
+                        if field != "schema_version"
+                    }
+            except (ValidationError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid personal preferences.",
+                ) from exc
+        # No catalog read or secret restoration is needed for personal drafts.
+        service = get_settings_draft_service()
+        if not extensions:
+            service.clear()
+            return {"draft": None}
+        return {"draft": service.save({"catalog": None, "extensions": extensions})}
     if payload.catalog is not None:
         _require_settings_admin()
     service = get_settings_draft_service()
@@ -1955,7 +2034,7 @@ async def update_ui_settings(update: UISettingsUpdate):
     # that view back would freeze today's defaults as this user's explicit
     # choices. The response keeps returning the merged view clients expect.
     patch_ui_settings(**dump)
-    return load_ui_settings()
+    return _settings_ui_payload()
 
 
 @router.post("/reset")

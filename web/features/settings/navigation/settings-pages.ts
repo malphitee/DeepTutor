@@ -100,6 +100,7 @@ const extraPages: SettingsLeaf[] = [
   },
   {
     key: 'status',
+    adminOnly: true,
     label: { en: 'Runtime status', zh: '运行状态' },
     blurb: {
       en: 'Service readiness, diagnostics, and memory usage',
@@ -113,13 +114,20 @@ const extraPages: SettingsLeaf[] = [
 
 export function visibleSettingsPages(access: SettingsAccess): SettingsLeaf[] {
   return [
-    ...extraPages,
+    ...extraPages.filter(leaf => isSettingsLeafVisible(leaf, access)),
     ...SETTINGS_CATEGORIES.filter(category => isSettingsCategoryVisible(category, access))
       .flatMap(category => category.children ?? [{ ...category, tile: '' }])
       .filter(
         leaf => isSettingsLeafVisible(leaf, access) && resolveSettingsKey(leaf.key) === leaf.key
       ),
   ]
+}
+
+export function isKnownSettingsPage(key: string): boolean {
+  const resolved = resolveSettingsKey(key)
+  return extraPages.some(page => page.key === resolved) || SETTINGS_CATEGORIES.some(category =>
+    category.key === resolved || category.children?.some(leaf => leaf.key === resolved)
+  )
 }
 
 export function settingsPageLabel(key: string, fallback: Lang): Lang {

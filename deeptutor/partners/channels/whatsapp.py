@@ -60,6 +60,7 @@ class WhatsAppChannel(BaseChannel):
 
         while self._running:
             try:
+                self.set_setup_state("connecting")
                 async with websockets.connect(bridge_url) as ws:
                     self._ws = ws
                     # Send auth token if configured
@@ -69,7 +70,11 @@ class WhatsAppChannel(BaseChannel):
                         )
                     self._connected = True
                     logger.info("Connected to WhatsApp bridge")
-                    self.set_setup_state("connecting")
+                    # A live bridge proves that the listener is running, not
+                    # that WhatsApp has authenticated. Some bridges omit the
+                    # initial status frame; QR/account events refine this
+                    # state when available instead of leaving Connecting up.
+                    self.set_setup_state("running")
 
                     # Listen for messages
                     async for message in ws:
@@ -77,21 +82,25 @@ class WhatsAppChannel(BaseChannel):
                             await self._handle_bridge_message(message)
                         except Exception as e:
                             logger.error("Error handling bridge message: {}", e)
+                self.set_setup_state("disconnected")
 
             except asyncio.CancelledError:
+                self.set_setup_state("disconnected")
                 break
             except Exception as e:
-                self._connected = False
-                self._ws = None
                 logger.warning("WhatsApp bridge connection error: {}", e)
                 self.set_setup_state(
                     "error",
                     message="Channel connection failed; the listener will retry.",
                 )
 
-                if self._running:
-                    logger.info("Reconnecting in 5 seconds...")
-                    await asyncio.sleep(5)
+            finally:
+                self._connected = False
+                self._ws = None
+
+            if self._running:
+                logger.info("Reconnecting in 5 seconds...")
+                await asyncio.sleep(5)
 
     async def stop(self) -> None:
         """Stop the WhatsApp channel."""

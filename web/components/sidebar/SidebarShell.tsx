@@ -1,5 +1,7 @@
 "use client";
 
+import { useLearningAccess } from "@/hooks/useLearningAccess";
+import { canAccessLearningSession } from "@/lib/learning-access";
 import { navigateTask } from "@/lib/workspace-scope";
 import Image from "next/image";
 import dynamic from "next/dynamic";
@@ -112,7 +114,8 @@ export function SidebarShell({
   const recentsScrollRef = useRef<HTMLDivElement>(null);
   // One load for the whole column: the workspace groups head their own
   // section with it and the row menus offer it as a move destination.
-  const { workspaces } = useChatWorkspaces();
+  const access = useLearningAccess();
+  const { workspaces } = useChatWorkspaces(access.resolved && access.statusAvailable && !access.policy);
 
   // Inside the mobile drawer the icon-only rail is pointless — the panel is
   // already hidden when you don't want it, so it always opens fully expanded
@@ -177,6 +180,8 @@ export function SidebarShell({
   // rendering and exposes older conversations through Show more.
   const visibleSessions = sessions.filter(
     (session) =>
+      access.resolved && access.statusAvailable &&
+      canAccessLearningSession(session, access.policy) &&
       !session.preferences?.archived && !session.preferences?.parent_session_id,
   );
 
@@ -238,7 +243,7 @@ export function SidebarShell({
             );
           })}
           {renderedFooter}
-          <VersionBadge onNavigate={closeDrawerOnNav} />
+          {access.isAdmin && <VersionBadge onNavigate={closeDrawerOnNav} />}
         </div>
       </aside>
     );
@@ -300,7 +305,7 @@ export function SidebarShell({
         onRenameSession &&
         onDeleteSession ? (
           <section className="mt-3 px-2 pt-0.5">
-            {!onOrganizeSession && <div className="mb-2 px-2 text-xs text-[var(--muted-foreground)]">{t("Recent")}</div>}
+            {(!onOrganizeSession || access.policy) && <div className="mb-2 px-2 text-xs text-[var(--muted-foreground)]">{t("Recent")}</div>}
             {loadingSessions ? (
               <SessionList
                 sessions={[]}
@@ -311,7 +316,7 @@ export function SidebarShell({
                 onDelete={onDeleteSession}
                 compact
               />
-            ) : onOrganizeSession ? (
+            ) : onOrganizeSession && !access.policy ? (
               <OrganizedSessionList
                 sessions={visibleSessions}
                 // Course grouping temporarily hidden pending further product
@@ -376,7 +381,7 @@ export function SidebarShell({
               </Link>
             );
           })}
-          <VersionBadge onNavigate={closeDrawerOnNav} />
+          {access.isAdmin && <VersionBadge onNavigate={closeDrawerOnNav} />}
         </div>
       </div>
       {!isMobile && (

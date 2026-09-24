@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import time
 from typing import Any, Awaitable, Callable
 
 import yaml
@@ -32,7 +33,9 @@ from deeptutor.services.partners.interaction import forget_partner_stores
 from deeptutor.services.partners.links import forget_partner_links
 from deeptutor.services.partners.runtime import PartnerRunner
 from deeptutor.services.partners.runtime_status import (
+    CHANNEL_STARTUP_TIMEOUT_SECONDS,
     get_partner_runtime_status_repository,
+    sanitize_channel_runtime,
 )
 from deeptutor.services.partners.sessions import PartnerSessionStore
 from deeptutor.services.partners.workspace import (
@@ -66,6 +69,7 @@ _SECRET_FIELD_HINTS: tuple[str, ...] = (
     "encrypt_key",
 )
 _SECRET_MASK = "***"
+_RUNTIME_STATUS_INTERVAL_SECONDS = 2.5
 
 
 def _is_secret_field(name: str) -> bool:
@@ -351,6 +355,8 @@ class PartnerInstance:
     channel_bindings: dict[str, str] = field(default_factory=dict)
     reload_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     last_reload_error: str | None = None
+    runtime_status_task: asyncio.Task | None = field(default=None, repr=False)
+    channel_status_since: dict[str, tuple[str, float]] = field(default_factory=dict, repr=False)
     # In-flight web turns by session_key, decoupled from the socket so a
     # refresh can reattach (see :class:`LiveTurn`).
     live_turns: dict[str, LiveTurn] = field(default_factory=dict, repr=False)
@@ -420,8 +426,11 @@ class PartnerManager:
         state: str,
         instance: PartnerInstance | None = None,
         last_reload_error: str | None = None,
+        heartbeat: bool = False,
     ) -> None:
         payload = instance.to_dict(mask_secrets=True) if instance is not None else {}
+        if instance is not None:
+            payload["channel_runtime"] = self.channel_runtime_status(instance)
         get_partner_runtime_status_repository().set(
             partner_id,
             owner_id=self.runtime_owner_id,
@@ -430,7 +439,90 @@ class PartnerManager:
             payload=payload,
             started_at=(instance.started_at.isoformat() if instance is not None else None),
             last_reload_error=last_reload_error,
+            heartbeat=heartbeat,
         )
+
+    def channel_runtime_status(self, instance: PartnerInstance) -> dict[str, Any]:
+        """Stable, credential-free channel state shared by local and remote readers."""
+        now = time.time()
+        channels = {
+            name: {
+                "enabled": bool(value.get("enabled")),
+                "running": False,
+                "setup": {"status": "disconnected"},
+            }
+            for name, value in instance.config.channels.items()
+            if isinstance(value, dict)
+        }
+        if instance.channel_manager:
+            channels.update(sanitize_channel_runtime(instance.channel_manager.get_status()))
+        listener_tasks = {
+            task.get_name().rsplit(":ch:", 1)[1]: task
+            for task in getattr(instance, "tasks", ())
+            if ":ch:" in task.get_name()
+        }
+        # Some older plugins do not publish setup state. A live listener is a
+        # stable fallback; a failed manager construction must remain actionable.
+        for name, entry in channels.items():
+            setup = entry["setup"]
+            if entry["enabled"] and instance.last_reload_error:
+                setup = entry["setup"] = {
+                    "status": "error",
+                    "message": instance.last_reload_error,
+                    "error_code": "channel_start_failed",
+                    "retryable": True,
+                }
+            elif not setup.get("status"):
+                setup["status"] = "running" if entry["running"] else "starting"
+            if not instance.running:
+                entry["running"] = False
+                if setup.get("status") in {"connected", "running", "starting", "connecting"}:
+                    setup = entry["setup"] = {"status": "disconnected"}
+            elif name in listener_tasks and listener_tasks[name].done():
+                entry["running"] = False
+                if setup.get("status") in {"connected", "running", "starting", "connecting"}:
+                    setup = entry["setup"] = {
+                        "status": "error",
+                        "message": "Channel listener stopped. Retry the channel.",
+                        "error_code": "channel_listener_stopped",
+                        "retryable": True,
+                    }
+            status = str(setup.get("status") or "disconnected")
+            previous = instance.channel_status_since.get(name)
+            since = previous[1] if previous and previous[0] == status else now
+            instance.channel_status_since[name] = (status, since)
+            entry["setup_updated_at"] = since
+            if (
+                status in {"starting", "connecting"}
+                and now - since >= CHANNEL_STARTUP_TIMEOUT_SECONDS
+            ):
+                entry["setup"] = {
+                    "status": "error",
+                    "message": "Channel startup timed out. Retry the channel.",
+                    "error_code": "channel_start_timeout",
+                    "retryable": True,
+                }
+        return channels
+
+    async def _publish_runtime_status_loop(self, instance: PartnerInstance) -> None:
+        while self._partners.get(instance.partner_id) is instance:
+            await asyncio.sleep(_RUNTIME_STATUS_INTERVAL_SECONDS)
+            if self._partners.get(instance.partner_id) is not instance:
+                return
+            try:
+                state = "running" if instance.running else "stopped"
+                if instance.last_reload_error:
+                    state = "reload_failed"
+                self._publish_runtime_status(
+                    instance.partner_id,
+                    running=instance.running,
+                    state=state,
+                    instance=instance,
+                    last_reload_error=instance.last_reload_error,
+                    heartbeat=True,
+                )
+            except Exception:
+                logger.exception("Failed to publish Partner runtime status")
 
     # ── Path helpers ──────────────────────────────────────────────
 
@@ -610,8 +702,32 @@ class PartnerManager:
     async def start_partner(
         self, partner_id: str, config: PartnerConfig | None = None
     ) -> PartnerInstance:
+        try:
+            return await self._start_partner(partner_id, config)
+        except Exception as exc:
+            self._publish_runtime_status(
+                partner_id,
+                running=False,
+                state="start_failed",
+                last_reload_error=f"Partner startup failed ({type(exc).__name__}).",
+            )
+            raise
+
+    async def _start_partner(
+        self, partner_id: str, config: PartnerConfig | None = None
+    ) -> PartnerInstance:
         if partner_id in self._partners and self._partners[partner_id].running:
-            return self._partners[partner_id]
+            instance = self._partners[partner_id]
+            # An idempotent start still acknowledges the explicit lifecycle
+            # command so a follower need not wait for the leader timeout.
+            self._publish_runtime_status(
+                partner_id,
+                running=True,
+                state="reload_failed" if instance.last_reload_error else "running",
+                instance=instance,
+                last_reload_error=instance.last_reload_error,
+            )
+            return instance
 
         self._ensure_partner_dirs(partner_id)
 
@@ -639,11 +755,13 @@ class PartnerManager:
             on_channel_activity=on_channel_activity,
         )
 
+        channel_start_error = None
         try:
             channel_manager = self._build_channel_manager(config, bus, partner_id=partner_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to initialise channels for partner '%s'", partner_id)
             channel_manager = None
+            channel_start_error = f"Channel initialization failed ({type(exc).__name__})."
 
         instance = PartnerInstance(
             partner_id=partner_id,
@@ -651,6 +769,7 @@ class PartnerManager:
             runner=runner,
             channel_manager=channel_manager,
             activity_feed=activity_feed,
+            last_reload_error=channel_start_error,
         )
 
         runner_task = asyncio.create_task(runner.run(), name=f"partner:{partner_id}:runner")
@@ -674,7 +793,17 @@ class PartnerManager:
         # lazy start (web chat) of an auto_start:false partner must not
         # silently re-enable auto-start.
         self.save_config(partner_id, config)
-        self._publish_runtime_status(partner_id, running=True, state="running", instance=instance)
+        self._publish_runtime_status(
+            partner_id,
+            running=True,
+            state="reload_failed" if channel_start_error else "running",
+            instance=instance,
+            last_reload_error=channel_start_error,
+        )
+        instance.runtime_status_task = asyncio.create_task(
+            self._publish_runtime_status_loop(instance),
+            name=f"partner:{partner_id}:status",
+        )
         logger.info("Partner '%s' started", partner_id)
         return instance
 
@@ -746,10 +875,13 @@ class PartnerManager:
             self._load_auto_start(partner_id, default=True) if preserve_auto_start else False
         )
 
-        for task in instance.tasks:
+        tasks = [*instance.tasks]
+        if instance.runtime_status_task is not None:
+            tasks.append(instance.runtime_status_task)
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        for task in instance.tasks:
+        for task in tasks:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
@@ -806,6 +938,7 @@ class PartnerManager:
 
         async with instance.reload_lock:
             await self._teardown_channel_listeners(instance, partner_id)
+            instance.channel_status_since.clear()
 
             try:
                 channel_manager = self._build_channel_manager(
@@ -816,7 +949,9 @@ class PartnerManager:
             except Exception as exc:
                 logger.exception("Failed to reload channels for partner '%s'", partner_id)
                 instance.channel_manager = None
-                instance.last_reload_error = f"{type(exc).__name__}: {exc}"
+                instance.last_reload_error = (
+                    f"Channel initialization failed ({type(exc).__name__})."
+                )
                 self._publish_runtime_status(
                     partner_id,
                     running=True,
@@ -1234,7 +1369,6 @@ class PartnerManager:
                 await self.start_partner(pid, config)
                 logger.info("Auto-started partner '%s'", pid)
             except Exception:
-                self._publish_runtime_status(pid, running=False, state="start_failed")
                 logger.exception("Failed to auto-start partner '%s'", pid)
 
     async def stop_all(self, *, preserve_auto_start: bool = True) -> None:

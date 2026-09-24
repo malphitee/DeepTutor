@@ -869,6 +869,8 @@ The **first registered user becomes admin** and owns model catalogs, provider cr
 
 **Enable it:** turn auth on in `data/user/settings/auth.json`, restart `deeptutor start`, register the first admin at `/register`, then add users from `/admin/users` and assign models, KBs, skills, partners, tool/MCP/CLI-app policy, and code-execution access through grants; configure shared books under each user's **Book access** panel.
 
+**Change your password:** open **My profile → Change password**, enter your current password, and confirm a new password of at least 8 characters (at most 72 UTF-8 bytes). Saving signs out all existing sessions; sign in again with your new password. An administrator configured through `auth.json` must update that deployment configuration instead; external authentication providers manage their own passwords.
+
 > PocketBase stays a single-user integration — keep `integrations.pocketbase_url` blank for multi-user deployments unless you've wired up an external user store.
 
 </details>

@@ -1382,6 +1382,27 @@
         "title": "ChangeBlockTypeRequest",
         "type": "object"
       },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "maxLength": 72,
+            "minLength": 1,
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 72,
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest",
+        "type": "object"
+      },
       "ChannelOnboardingStartRequest": {
         "properties": {
           "channel": {
@@ -6717,6 +6738,70 @@
           "knowledge_base_id"
         ],
         "title": "ProbeWeKnoraRequest",
+        "type": "object"
+      },
+      "ProfileInfo": {
+        "properties": {
+          "avatar": {
+            "default": "",
+            "title": "Avatar",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "disabled": {
+            "default": false,
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "id": {
+            "default": "",
+            "title": "Id",
+            "type": "string"
+          },
+          "password_change_supported": {
+            "default": false,
+            "title": "Password Change Supported",
+            "type": "boolean"
+          },
+          "password_change_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Change Unavailable Reason"
+          },
+          "preset": {
+            "default": "standard",
+            "enum": [
+              "standard",
+              "learner",
+              "custom"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role",
+          "created_at"
+        ],
+        "title": "ProfileInfo",
         "type": "object"
       },
       "ProviderEditPayload": {
@@ -12620,7 +12705,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UserInfo"
+                  "$ref": "#/components/schemas/ProfileInfo"
                 }
               }
             },
@@ -13002,6 +13087,80 @@
           }
         },
         "summary": "Put Current Learner Profile",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/profile/password": {
+      "post": {
+        "description": "Change the authenticated account's own password and require a fresh login.",
+        "operationId": "change_profile_password_api_auth_profile_password_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Profile Password",
         "tags": [
           "auth"
         ]

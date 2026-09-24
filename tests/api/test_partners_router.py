@@ -24,6 +24,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def isolated_root(tmp_path, monkeypatch) -> Path:
     from deeptutor.multi_user import paths
+    from deeptutor.services.partners import runtime_status
 
     project_root = tmp_path
     admin_root = (project_root / "data").resolve()
@@ -32,6 +33,7 @@ def isolated_root(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(paths, "USERS_ROOT", admin_root / "users")
     monkeypatch.setattr(paths, "SYSTEM_ROOT", admin_root / "system")
     monkeypatch.setattr(paths, "_path_services", {})
+    monkeypatch.setattr(runtime_status, "_repository", None)
     admin_root.mkdir(parents=True, exist_ok=True)
     return admin_root
 
@@ -82,6 +84,207 @@ def _create(client: TestClient, **overrides):
         **overrides,
     }
     return client.post("/api/partners", json=payload)
+
+
+class TestChannelRuntimeStatus:
+    @pytest.mark.parametrize(
+        "status", ["connected", "running", "action_required", "unavailable", "error"]
+    )
+    def test_non_leader_reads_shared_channel_state_after_refresh(self, client, status):
+        from deeptutor.services.partners.runtime_status import get_partner_runtime_status_repository
+
+        assert _create(client, channels={"whatsapp": {"enabled": True}}).status_code == 200
+        repository = get_partner_runtime_status_repository()
+        repository.set(
+            "ada",
+            owner_id="other-worker",
+            running=True,
+            state="running",
+            payload={
+                "channel_runtime": {
+                    "whatsapp": {
+                        "enabled": True,
+                        "running": status in {"connected", "running"},
+                        "setup_updated_at": 123.0,
+                        "setup": {"status": status},
+                    }
+                }
+            },
+        )
+
+        for _ in range(2):
+            result = client.get("/api/partners/ada/channels/status").json()
+            assert result["running"] is True
+            assert result["runtime_updated_at"] > 0
+            assert result["channels"]["whatsapp"]["setup"]["status"] == status
+            assert result["channels"]["whatsapp"]["setup_updated_at"] == 123.0
+
+    @pytest.mark.parametrize("runtime_state", ["running", "reload_failed", "start_failed"])
+    def test_stale_leader_status_is_actionable_and_survives_refresh(
+        self, client, monkeypatch, runtime_state
+    ):
+        from deeptutor.api.routers import partners as router_module
+        from deeptutor.services.partners.runtime_status import get_partner_runtime_status_repository
+
+        assert _create(client, channels={"whatsapp": {"enabled": True}}).status_code == 200
+        repository = get_partner_runtime_status_repository()
+        status = repository.set("ada", owner_id="dead-worker", running=True, state=runtime_state)
+        monkeypatch.setattr(router_module.time, "time", lambda: status["runtime_updated_at"] + 31)
+
+        for _ in range(2):
+            result = client.get("/api/partners/ada/channels/status").json()
+            assert result["running"] is False
+            assert result["channels"]["whatsapp"]["setup"] == {
+                "status": "unavailable",
+                "message": "Partner runtime is unavailable. Start the partner and retry.",
+                "error_code": "unavailable",
+                "retryable": True,
+            }
+
+    def test_timed_out_reload_expires_with_the_leader_and_allows_start_retry(
+        self, client, monkeypatch
+    ):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from deeptutor.api.routers import partners as router_module
+        from deeptutor.services.partners.runtime_status import get_partner_runtime_status_repository
+
+        assert _create(client, channels={"whatsapp": {"enabled": True}}).status_code == 200
+        repository = get_partner_runtime_status_repository()
+        original = repository.set("ada", owner_id="old-leader", running=True, state="running")
+        last_heartbeat = original["runtime_updated_at"]
+        clock = [last_heartbeat + 20]
+        monkeypatch.setattr(router_module.time, "time", lambda: clock[0])
+        coordinator = SimpleNamespace(
+            leader_id=AsyncMock(return_value="old-leader"),
+            submit_background_command=AsyncMock(return_value=SimpleNamespace(created_at=clock[0])),
+        )
+        monkeypatch.setattr(
+            router_module,
+            "get_application_container",
+            lambda: SimpleNamespace(
+                worker_id="new-leader",
+                settings=SimpleNamespace(backend_workers=2),
+                coordinator=coordinator,
+            ),
+        )
+        monkeypatch.setattr(router_module, "_PARTNER_CONTROL_TIMEOUT_SECONDS", 0)
+
+        assert client.post("/api/partners/ada/channels/reload").status_code == 503
+        timed_out = repository.get("ada")
+        assert timed_out["runtime_state"] == "control_failed"
+        assert timed_out["runtime_updated_at"] == last_heartbeat
+        assert client.get("/api/partners/ada/channels/status").json()["running"] is True
+
+        clock[0] = last_heartbeat + 31
+        status = client.get("/api/partners/ada/channels/status").json()
+        assert status["running"] is False
+        assert status["runtime_state"] == "unavailable"
+        assert status["channels"]["whatsapp"]["setup"]["retryable"] is True
+
+        # Once this worker is elected, the UI's start retry can create a local
+        # instance instead of sending another reload to a missing instance.
+        coordinator.leader_id.return_value = "new-leader"
+        instance = SimpleNamespace(
+            config=router_module.get_partner_manager().load_config("ada"),
+            to_dict=lambda **_kwargs: {"partner_id": "ada", "running": True},
+        )
+        ensure_running = AsyncMock(return_value=instance)
+        monkeypatch.setattr(router_module, "_ensure_running_partner", ensure_running)
+        assert client.post("/api/partners/ada/start").json()["running"] is True
+        ensure_running.assert_awaited_once_with("ada", allow_stopped=True)
+
+    def test_start_failure_remains_visible_when_no_local_instance_exists(self, client):
+        from deeptutor.services.partners.runtime_status import get_partner_runtime_status_repository
+
+        assert _create(client, channels={"whatsapp": {"enabled": True}}).status_code == 200
+        get_partner_runtime_status_repository().set(
+            "ada",
+            owner_id="leader",
+            running=False,
+            state="start_failed",
+            last_reload_error="Partner startup failed (ValueError).",
+        )
+        result = client.get("/api/partners/ada/channels/status").json()
+        assert result["running"] is False
+        assert result["channels"]["whatsapp"]["setup"]["status"] == "error"
+        assert result["channels"]["whatsapp"]["setup"]["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_remote_start_failure_returns_without_waiting_for_leader_timeout(
+    isolated_root, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from deeptutor.api.routers import partners as router_module
+    from deeptutor.runtime.coordination import BackgroundCommandKind
+    from deeptutor.services.partners.runtime_status import get_partner_runtime_status_repository
+
+    repository = get_partner_runtime_status_repository()
+    status = repository.set(
+        "ada",
+        owner_id="leader",
+        running=False,
+        state="start_failed",
+        last_reload_error="Partner startup failed (ValueError).",
+    )
+    coordinator = SimpleNamespace(
+        leader_id=AsyncMock(return_value="leader"),
+        submit_background_command=AsyncMock(
+            return_value=SimpleNamespace(created_at=status["runtime_updated_at"] - 1)
+        ),
+    )
+    monkeypatch.setattr(
+        router_module,
+        "get_application_container",
+        lambda: SimpleNamespace(
+            worker_id="follower",
+            settings=SimpleNamespace(backend_workers=2),
+            coordinator=coordinator,
+        ),
+    )
+    with pytest.raises(HTTPException) as raised:
+        await router_module._request_partner_control(BackgroundCommandKind.PARTNER_START, "ada")
+    assert raised.value.status_code == 500
+    assert raised.value.detail == "Partner startup failed (ValueError)."
+
+
+@pytest.mark.asyncio
+async def test_leader_timeout_is_persisted_for_subsequent_status_reads(isolated_root, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from deeptutor.api.routers import partners as router_module
+    from deeptutor.runtime.coordination import BackgroundCommandKind
+    from deeptutor.services.partners.runtime_status import get_partner_runtime_status_repository
+
+    coordinator = SimpleNamespace(
+        leader_id=AsyncMock(return_value="leader"),
+        submit_background_command=AsyncMock(return_value=SimpleNamespace(created_at=1)),
+    )
+    monkeypatch.setattr(
+        router_module,
+        "get_application_container",
+        lambda: SimpleNamespace(
+            worker_id="follower",
+            settings=SimpleNamespace(backend_workers=2),
+            coordinator=coordinator,
+        ),
+    )
+    monkeypatch.setattr(router_module, "_PARTNER_CONTROL_TIMEOUT_SECONDS", 0)
+    with pytest.raises(HTTPException) as raised:
+        await router_module._request_partner_control(BackgroundCommandKind.PARTNER_START, "ada")
+    assert raised.value.status_code == 503
+    status = get_partner_runtime_status_repository().get("ada")
+    assert status["runtime_state"] == "control_failed"
+    assert "Retry the channel" in status["last_reload_error"]
 
 
 class TestCreate:
@@ -269,6 +472,8 @@ class TestChannelOnboarding:
         manager = router_mod.get_partner_manager()
         manager._partners["ada"] = SimpleNamespace(
             running=True,
+            last_reload_error=None,
+            channel_status_since={},
             config=SimpleNamespace(channels={"whatsapp": {"enabled": True}}),
             channel_manager=SimpleNamespace(
                 get_status=lambda: {

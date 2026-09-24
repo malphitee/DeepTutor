@@ -43,10 +43,17 @@ function toStreamEvent(event: ServerEvent): StreamEvent | null {
   if (event.type === "protocol_error") {
     // Admission failures have no turn stream and therefore no DONE event.
     // Translate them for the chat reducer instead of leaving STREAM_START
-    // pending forever. A failed subscription can still recover its live turn.
+    // pending forever. The user can retry a failed subscription from the
+    // terminal error row instead of being trapped in a running composer.
     const terminal = new Set([
       "start_turn_rejected", "regenerate_rejected", "invalid_command",
       "invalid_json", "unsupported_protocol_version", "unknown_message_type",
+      // These errors mean the requested session/turn cannot be subscribed to
+      // in the current authenticated scope. Retrying the same subscription
+      // cannot produce a terminal frame and used to leave the composer in
+      // ``DeepTutor reasoning…`` forever.
+      "turn_not_found", "session_not_found", "missing_turn_id", "missing_session_id",
+      "subscription_failed", "internal_error",
     ]).has(event.error_code);
     return {
       type: "error",
@@ -58,7 +65,7 @@ function toStreamEvent(event: ServerEvent): StreamEvent | null {
       timestamp: Date.now() / 1000,
       metadata: {
         reason: event.error_code,
-        retryable: event.retryable,
+        retryable: Boolean(event.retryable || terminal),
         turn_terminal: terminal,
         ...(terminal ? { status: "failed" } : {}),
       },

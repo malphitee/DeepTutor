@@ -1,6 +1,8 @@
-import { LEARNING_HUB } from '@/lib/learning-routes'
+import { canAccessLearningPath, type LearningPolicy } from '@/lib/learning-access'
+import { LEARNING_HUB, READING_HOME } from '@/lib/learning-routes'
 import {
   Bot,
+  BookOpen,
   GraduationCap,
   HeartHandshake,
   House,
@@ -64,6 +66,16 @@ export const PRIMARY_NAV: NavEntry[] = [
   },
 ]
 
+const READING_NAV: NavEntry = {
+  href: READING_HOME, label: 'Immersive Reading', icon: BookOpen,
+}
+
+export function primaryNavForPolicy(policy: LearningPolicy | null): NavEntry[] {
+  if (!policy) return PRIMARY_NAV
+  return [...PRIMARY_NAV.filter(entry => canAccessLearningPath(entry.href, policy)),
+    ...(canAccessLearningPath(READING_HOME, policy) ? [READING_NAV] : [])]
+}
+
 export const SECONDARY_NAV: NavEntry[] = [{ href: '/settings', label: 'Settings', icon: Settings }]
 
 export const DEFAULT_COLLAPSED_NAV = PRIMARY_NAV.filter(entry => entry.defaultCollapsed).map(
@@ -73,7 +85,7 @@ export const DEFAULT_COLLAPSED_NAV = PRIMARY_NAV.filter(entry => entry.defaultCo
 export const PRIMARY_NAV_HREFS = PRIMARY_NAV.map(entry => entry.href)
 
 export const NAV_BY_HREF = new Map(
-  [...PRIMARY_NAV, ...SECONDARY_NAV].map(entry => [entry.href, entry])
+  [...PRIMARY_NAV, READING_NAV, ...SECONDARY_NAV].map(entry => [entry.href, entry])
 )
 
 export function isNavActive(pathname: string, href: string) {
