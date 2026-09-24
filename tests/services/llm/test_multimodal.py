@@ -1,9 +1,10 @@
 """Tests for the two-stage multimodal pipeline.
 
-Stage 1 (:func:`prepare_multimodal_messages`) injects image attachments for
-*every* provider/model — there is no ``supports_vision`` pre-flight gate. It
-only resolves URL→base64 where the provider's *format* requires it and drops
-url-only images it cannot encode (``url_images_dropped``).
+Stage 1 (:func:`prepare_multimodal_messages`) injects valid image attachments
+for *every* provider/model — there is no ``supports_vision`` pre-flight gate.
+It resolves URL→base64 where the provider's *format* requires it, drops
+url-only images it cannot encode (``url_images_dropped``), and rejects invalid
+inline bytes before the provider call (``invalid_images_dropped``).
 
 Stage 2 (:func:`should_degrade_to_text` + :func:`strip_image_parts*`) is the
 post-failure fallback: applied at each call site's retry seam, it strips images
@@ -33,6 +34,9 @@ def _msgs() -> list[dict]:
     return [{"role": "user", "content": "describe"}]
 
 
+_PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKE").decode("ascii")
+
+
 def _img_part_url(message: dict) -> str:
     parts = message["content"]
     img = next(p for p in parts if p.get("type") == "image_url")
@@ -56,31 +60,71 @@ def test_openai_compat_prefers_base64_when_both_present() -> None:
     att = SimpleNamespace(
         type="image",
         url="https://example.com/cat.png",
-        base64="QUJD",  # "ABC"
+        base64=_PNG_B64,
         mime_type="image/png",
     )
     result = prepare_multimodal_messages(_msgs(), [att], binding="openai", model="gpt-4o")
     url = _img_part_url(result.messages[0])
-    assert url.startswith("data:image/png;base64,QUJD")
+    assert url.startswith(f"data:image/png;base64,{_PNG_B64}")
 
 
 def test_unknown_provider_still_injects_images() -> None:
     """Regression for the Doubao/VolcEngine bug: a provider with no capability
     entry (``supports_vision`` defaults False) must STILL receive the image —
     Stage 1 never gates on the capability flag."""
-    att = SimpleNamespace(type="image", base64="QUJD", mime_type="image/png")
+    att = SimpleNamespace(type="image", base64=_PNG_B64, mime_type="image/png")
     result = prepare_multimodal_messages(
         _msgs(), [att], binding="some-unregistered-provider", model="doubao-1.5-vision-pro"
     )
-    assert _img_part_url(result.messages[0]).startswith("data:image/png;base64,QUJD")
+    assert _img_part_url(result.messages[0]).startswith(
+        f"data:image/png;base64,{_PNG_B64}"
+    )
+
+
+def test_invalid_or_unsupported_inline_image_is_dropped_before_provider_call() -> None:
+    att = SimpleNamespace(
+        type="image",
+        base64=base64.b64encode(b"not an image").decode("ascii"),
+        mime_type="image/heic",
+        filename="broken.heic",
+    )
+
+    result = prepare_multimodal_messages(
+        _msgs(), [att], binding="openai", model="gpt-4o"
+    )
+
+    assert result.invalid_images_dropped == 1
+    assert not any(
+        part.get("type") == "image_url" for part in result.messages[0]["content"]
+    )
+    assert "skipped" in result.messages[0]["content"][-1]["text"].lower()
+
+
+def test_inline_image_mime_is_derived_from_bytes_not_browser_metadata() -> None:
+    raw = b"\x89PNG\r\n\x1a\nFAKE"
+    att = SimpleNamespace(
+        type="image",
+        base64=base64.b64encode(raw).decode("ascii"),
+        mime_type="image/jpeg",
+        filename="wrong.jpg",
+    )
+
+    result = prepare_multimodal_messages(
+        _msgs(), [att], binding="openai", model="gpt-4o"
+    )
+
+    assert result.invalid_images_dropped == 0
+    assert _img_part_url(result.messages[0]).startswith("data:image/png;base64,")
 
 
 def test_text_only_model_still_injects_images() -> None:
     """A plain Moonshot text model no longer strips images at Stage 1 — the
     image is injected optimistically; degrade happens later via Stage 2."""
-    att = SimpleNamespace(type="image", base64="QUJD", mime_type="image/png")
+    att = SimpleNamespace(type="image", base64=_PNG_B64, mime_type="image/png")
     result = prepare_multimodal_messages(_msgs(), [att], binding="moonshot", model="moonshot-v1-8k")
-    assert _img_part_url(result.messages[0]).startswith("data:image/png;base64,QUJD")
+    assert _img_part_url(result.messages[0]).startswith(
+        f"data:image/png;base64,{_PNG_B64}"
+    )
 
 
 # ---------------------------------------------------------------------------

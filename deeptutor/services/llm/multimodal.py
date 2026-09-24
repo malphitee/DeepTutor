@@ -13,6 +13,7 @@ Supports:
 from __future__ import annotations
 
 import base64 as _b64
+import binascii as _binascii
 from dataclasses import dataclass
 import logging
 from typing import Any
@@ -30,10 +31,10 @@ _LOCAL_ATTACHMENT_PREFIX = "/files/attachments/"
 class MultimodalResult:
     """Result of Stage-1 multimodal message preparation.
 
-    Images are injected optimistically for every provider, so there is no
-    "stripped because unsupported" outcome here — that decision is deferred
-    to the Stage-2 fallback at each call site's retry seam (see
-    :func:`should_degrade_to_text`).
+    Valid images are injected optimistically for every provider, so model
+    capability fallback remains deferred to each call site's Stage-2 retry
+    seam (see :func:`should_degrade_to_text`). Invalid image bytes are rejected
+    here before they can trigger a provider error.
     """
 
     messages: list[dict[str, Any]]
@@ -41,6 +42,9 @@ class MultimodalResult:
     # base64 and we couldn't resolve the URL locally (external URL or missing
     # file). The caller can surface this to the user.
     url_images_dropped: int = 0
+    # Inline/local images rejected before an external provider call because
+    # their bytes are not one of the four provider-safe raster formats.
+    invalid_images_dropped: int = 0
 
 
 def _guess_mime_type(filename: str, fallback: str = MIME_FALLBACK) -> str:
@@ -53,6 +57,19 @@ def _guess_mime_type(filename: str, fallback: str = MIME_FALLBACK) -> str:
         "webp": "image/webp",
         "svg": "image/svg+xml",
     }.get(ext, fallback)
+
+
+def _detect_supported_image_mime(data: bytes) -> str | None:
+    """Sniff the provider-supported raster formats from their file signature."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _build_openai_image_part(
@@ -138,9 +155,10 @@ def prepare_multimodal_messages(
 
     The last user message ``content`` is converted from a plain string into a
     content-parts array holding the original text plus the image(s). The only
-    images dropped *here* are url-only attachments the provider can't accept in
-    URL form (Anthropic, or ``vision_url_supported=False``) and that can't be
-    resolved to local bytes — counted in ``url_images_dropped``.
+    Images dropped *here* are either url-only attachments the provider can't
+    accept in URL form (counted in ``url_images_dropped``), or inline/local
+    payloads that are not valid JPG/PNG/GIF/WebP bytes (counted in
+    ``invalid_images_dropped``).
 
     Args:
         messages: The OpenAI-style messages list (may be mutated).
@@ -167,7 +185,7 @@ def prepare_multimodal_messages(
     # Moonshot / VolcEngine reject URL form outright. In both cases url-only
     # attachments must be resolved to bytes before injection.
     require_base64 = is_anthropic or not supports_vision_url(binding, model)
-    dropped = _inject_images(
+    url_dropped, invalid_dropped = _inject_images(
         messages,
         last_user_idx,
         image_attachments,
@@ -175,7 +193,11 @@ def prepare_multimodal_messages(
         require_base64=require_base64,
     )
 
-    return MultimodalResult(messages=messages, url_images_dropped=dropped)
+    return MultimodalResult(
+        messages=messages,
+        url_images_dropped=url_dropped,
+        invalid_images_dropped=invalid_dropped,
+    )
 
 
 def _find_last_user_message(messages: list[dict[str, Any]]) -> int | None:
@@ -192,11 +214,10 @@ def _inject_images(
     *,
     anthropic: bool = False,
     require_base64: bool = False,
-) -> int:
+) -> tuple[int, int]:
     """Inject image parts into the user message at *user_idx*.
 
-    Returns the count of url-only attachments we had to drop because the
-    provider needs base64 and the URL could not be resolved locally.
+    Returns ``(url_images_dropped, invalid_images_dropped)``.
     """
     msg = messages[user_idx]
     original_content = msg.get("content", "")
@@ -208,7 +229,8 @@ def _inject_images(
     else:
         content_parts = [{"type": "text", "text": str(original_content)}]
 
-    dropped = 0
+    url_dropped = 0
+    invalid_dropped = 0
     for att in image_attachments:
         mime = getattr(att, "mime_type", "") or _guess_mime_type(
             getattr(att, "filename", "image.png")
@@ -236,7 +258,7 @@ def _inject_images(
                     " URL is not a resolvable local attachment-store path",
                     url,
                 )
-                dropped += 1
+                url_dropped += 1
                 continue
             elif is_local_attachment_url:
                 logger.warning(
@@ -244,13 +266,41 @@ def _inject_images(
                     " resolved from the AttachmentStore",
                     url,
                 )
-                dropped += 1
+                url_dropped += 1
                 continue
+
+        if b64:
+            try:
+                raw = _b64.b64decode(b64, validate=True)
+            except (ValueError, _binascii.Error):
+                raw = b""
+            detected_mime = _detect_supported_image_mime(raw)
+            if detected_mime is None:
+                filename = str(getattr(att, "filename", "") or "image")
+                logger.warning(
+                    "Dropping invalid or unsupported inline image %r before provider call",
+                    filename,
+                )
+                content_parts.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"[Image attachment skipped: {filename} is not a valid "
+                            "JPG, PNG, GIF, or WebP image.]"
+                        ),
+                    }
+                )
+                invalid_dropped += 1
+                continue
+            # Browser-provided MIME metadata is not trustworthy. Matching it
+            # to the bytes prevents valid images with a wrong label from being
+            # rejected by the provider.
+            mime = detected_mime
 
         if anthropic:
             if not b64:
                 logger.warning("Anthropic image part requires base64; dropping %r", url)
-                dropped += 1
+                url_dropped += 1
                 continue
             content_parts.append(_build_anthropic_image_part(base64_data=b64, mime_type=mime))
         else:
@@ -265,7 +315,7 @@ def _inject_images(
                 )
 
     messages[user_idx] = {**msg, "content": content_parts}
-    return dropped
+    return url_dropped, invalid_dropped
 
 
 _IMAGE_BLOCK_TYPES = frozenset({"image_url", "image"})

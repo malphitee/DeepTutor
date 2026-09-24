@@ -45,6 +45,8 @@
   "Unsupported file type: {{name}}": "Unsupported file type: {{name}}",
   "File too large: {{name}}": "File too large: {{name}}",
   "Too many files, skipped some": "Too many files, skipped some",
+  "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.": "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+  "Could not read file: {{name}}": "Could not read file: {{name}}",
   "Attachment preview": "Attachment preview",
   "Attachment": "Attachment",
   "Attach": "Attach",

@@ -45,6 +45,8 @@
   "Unsupported file type: {{name}}": "不支持的文件类型：{{name}}",
   "File too large: {{name}}": "文件过大：{{name}}",
   "Too many files, skipped some": "附件总量超出限制，已跳过部分文件",
+  "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.": "无法读取图片：{{name}}。请使用有效的 JPG、PNG、GIF 或 WebP 图片。",
+  "Could not read file: {{name}}": "无法读取文件：{{name}}",
   "Attachment preview": "附件预览",
   "Attachment": "附件",
   "Attach": "附件",
