@@ -79,7 +79,7 @@ import {
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
 import {
-  fileToPendingAttachment,
+  preparePendingAttachments,
   selectAttachmentFiles,
   type PendingAttachment,
 } from "@/features/chat/controllers/pending-attachments";
@@ -98,10 +98,7 @@ import { useMeasuredHeight } from "@/hooks/useMeasuredHeight";
 import { useSetupSync } from "@/hooks/useSetupSync";
 import { listCourses, type StudyCourse } from "@/lib/courses-api";
 import { consumePendingPrompt } from "@/lib/pending-prompt";
-import {
-  fetchSessionAskHint,
-  updateSessionOrganization,
-} from "@/lib/session-api";
+import { updateSessionOrganization } from "@/lib/session-api";
 import {
   DEFAULT_QUIZ_CONFIG,
   buildQuizWSConfig,
@@ -751,26 +748,6 @@ export default function ChatWorkspace({
   // "done" while nothing visibly changes.
   useSetupSync(state.messages);
   const hasMessages = state.messages.length > 0;
-  // A line the user might type next, written by the task model against the
-  // conversation's own tail — general prediction, not a question to ask,
-  // unlike the mastery/reading composers' hint. Empty conversations already
-  // get their own richer suggestions from StarterSuggestions below, so this
-  // only ever runs once there is something to continue. Cleared on session
-  // switch so a prior chat's guess never lingers as this one's placeholder.
-  const [askHint, setAskHint] = useState("");
-  useEffect(() => {
-    setAskHint("");
-  }, [state.sessionId]);
-  useEffect(() => {
-    if (state.isStreaming || !hasMessages || !state.sessionId) return;
-    let cancelled = false;
-    void fetchSessionAskHint(state.sessionId).then((hint) => {
-      if (!cancelled) setAskHint(hint);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [state.isStreaming, hasMessages, state.sessionId, state.messages.length]);
   // Time-of-day greeting: seeded once on mount from the user's local clock so
   // the heading stays stable while they're on the page. State (not useMemo)
   // because the random pick would otherwise mismatch SSR ↔ client hydration.
@@ -1477,8 +1454,6 @@ export default function ChatWorkspace({
     [capabilities, setCapability, setTools, userEnabledTools, watching, router],
   );
 
-  const fileToAttachment = fileToPendingAttachment;
-
   const showAttachmentError = useCallback((message: string) => {
     setAttachmentError(message);
     if (attachmentErrorTimer.current) {
@@ -1514,6 +1489,26 @@ export default function ChatWorkspace({
     [attachments, attachmentLimits, showAttachmentError, t],
   );
 
+  const prepareAndAppendFiles = useCallback(
+    async (files: File[]) => {
+      const { attachments: next, failures } =
+        await preparePendingAttachments(files);
+      if (failures.length) {
+        const first = failures[0];
+        showAttachmentError(
+          first.reason === "invalid_image"
+            ? t(
+                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                { name: first.name },
+              )
+            : t("Could not read file: {{name}}", { name: first.name }),
+        );
+      }
+      if (next.length) setAttachments((prev) => [...prev, ...next]);
+    },
+    [showAttachmentError, t],
+  );
+
   const handlePaste = useCallback(
     async (event: React.ClipboardEvent) => {
       const items = Array.from(event.clipboardData.items);
@@ -1524,10 +1519,9 @@ export default function ChatWorkspace({
       const accepted = filterAndReportFiles(files);
       if (!accepted.length) return;
       event.preventDefault();
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   const removeAttachment = useCallback((index: number) => {
@@ -1813,20 +1807,18 @@ export default function ChatWorkspace({
       dragCounter.current = 0;
       const accepted = filterAndReportFiles(Array.from(e.dataTransfer.files));
       if (!accepted.length) return;
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   const handleAddFiles = useCallback(
     async (files: File[]) => {
       const accepted = filterAndReportFiles(files);
       if (!accepted.length) return;
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   // Connected subagents are stored as ``type: subagent`` KBs. Derive the
@@ -2746,8 +2738,6 @@ export default function ChatWorkspace({
                 onSelectCapability={handleSelectCapability}
                 onCancelStreaming={cancelStreamingTurn}
                 prefillInputRef={prefillInputRef}
-                inputPlaceholder={askHint || undefined}
-                inputPlaceholderCompletion={askHint}
               />
               {/* Starter chips sit between the composer and the spacer, so they
                 ride up with the composer on the empty screen and disappear the

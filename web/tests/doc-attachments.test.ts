@@ -21,6 +21,12 @@ test("classifyFile: image via MIME", () => {
   assert.equal(classifyFile(makeFile("x.jpg", "image/jpeg")), "image");
 });
 
+test("classifyFile: mobile image via extension when MIME is empty", () => {
+  assert.equal(classifyFile(makeFile("IMG_0123.HEIC")), "image");
+  assert.equal(classifyFile(makeFile("camera.heif")), "image");
+  assert.equal(classifyFile(makeFile("photo.avif")), "image");
+});
+
 test("classifyFile: doc via MIME", () => {
   assert.equal(
     classifyFile(

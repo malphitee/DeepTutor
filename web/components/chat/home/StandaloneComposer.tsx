@@ -41,7 +41,7 @@ import {
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
 import {
-  fileToPendingAttachment,
+  preparePendingAttachments,
   selectAttachmentFiles,
   type PendingAttachment,
 } from "@/features/chat/controllers/pending-attachments";
@@ -434,8 +434,6 @@ function StandaloneComposerImpl({
     }, 4000);
   }, []);
 
-  const fileToAttachment = fileToPendingAttachment;
-
   const filterAndReportFiles = useCallback(
     (files: File[]): File[] => {
       const { accepted, rejected } = selectAttachmentFiles(
@@ -460,14 +458,33 @@ function StandaloneComposerImpl({
     [attachments, attachmentLimits, showAttachmentError, t],
   );
 
+  const prepareAndAppendFiles = useCallback(
+    async (files: File[]) => {
+      const { attachments: next, failures } =
+        await preparePendingAttachments(files);
+      if (failures.length) {
+        const first = failures[0];
+        showAttachmentError(
+          first.reason === "invalid_image"
+            ? t(
+                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                { name: first.name },
+              )
+            : t("Could not read file: {{name}}", { name: first.name }),
+        );
+      }
+      if (next.length) setAttachments((prev) => [...prev, ...next]);
+    },
+    [showAttachmentError, t],
+  );
+
   const handleAddFiles = useCallback(
     async (files: File[]) => {
       const accepted = filterAndReportFiles(files);
       if (!accepted.length) return;
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   const removeAttachment = useCallback((index: number) => {
@@ -484,10 +501,9 @@ function StandaloneComposerImpl({
       const accepted = filterAndReportFiles(files);
       if (!accepted.length) return;
       event.preventDefault();
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   // ── Drag-and-drop on the composer surface ─────────────────────
