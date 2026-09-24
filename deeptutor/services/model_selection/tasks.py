@@ -62,7 +62,6 @@ class TaskKind(StrEnum):
 
     SESSION_TITLE = "session_title"
     CHAT_STARTERS = "chat_starters"
-    CHAT_ASK_HINT = "chat_ask_hint"
     MASTERY_ASK_HINT = "mastery_ask_hint"
     MASTERY_GOAL_NAME = "mastery_goal_name"
     READING_ASK_HINT = "reading_ask_hint"
@@ -86,7 +85,6 @@ class TaskKindSpec:
 TASK_KINDS: tuple[TaskKindSpec, ...] = (
     TaskKindSpec(TaskKind.SESSION_TITLE, "chat"),
     TaskKindSpec(TaskKind.CHAT_STARTERS, "chat"),
-    TaskKindSpec(TaskKind.CHAT_ASK_HINT, "chat"),
     TaskKindSpec(TaskKind.MASTERY_GOAL_NAME, "mastery"),
     TaskKindSpec(TaskKind.MASTERY_ASK_HINT, "mastery"),
     TaskKindSpec(TaskKind.READING_ASK_HINT, "reading"),

@@ -6684,26 +6684,6 @@ export interface paths {
     readonly patch: operations["rename_session_api_sessions__session_id__patch"];
     readonly trace?: never;
   };
-  readonly "/api/sessions/{session_id}/ask-hint": {
-    readonly parameters: {
-      readonly query?: never;
-      readonly header?: never;
-      readonly path?: never;
-      readonly cookie?: never;
-    };
-    /**
-     * Get Session Ask Hint
-     * @description One line the user is likely to type next, for the home composer placeholder.
-     */
-    readonly get: operations["get_session_ask_hint_api_sessions__session_id__ask_hint_get"];
-    readonly put?: never;
-    readonly post?: never;
-    readonly delete?: never;
-    readonly options?: never;
-    readonly head?: never;
-    readonly patch?: never;
-    readonly trace?: never;
-  };
   readonly "/api/sessions/{session_id}/branch-selection": {
     readonly parameters: {
       readonly query?: never;
@@ -30828,43 +30808,6 @@ export interface operations {
         };
         content: {
           readonly "application/json": unknown;
-        };
-      };
-      /** @description Validation Error */
-      readonly 422: {
-        headers: {
-          readonly [name: string]: unknown;
-        };
-        content: {
-          readonly "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  readonly get_session_ask_hint_api_sessions__session_id__ask_hint_get: {
-    readonly parameters: {
-      readonly query?: never;
-      readonly header?: {
-        readonly Authorization?: string | null;
-      };
-      readonly path: {
-        readonly session_id: string;
-      };
-      readonly cookie?: {
-        readonly dt_token?: string | null;
-      };
-    };
-    readonly requestBody?: never;
-    readonly responses: {
-      /** @description Successful Response */
-      readonly 200: {
-        headers: {
-          readonly [name: string]: unknown;
-        };
-        content: {
-          readonly "application/json": {
-            readonly [key: string]: unknown;
-          };
         };
       };
       /** @description Validation Error */
