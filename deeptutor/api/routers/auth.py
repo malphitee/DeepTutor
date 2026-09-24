@@ -1113,6 +1113,13 @@ async def get_profile(
     """Return the current user's own account info."""
     current = _require_profile_identity(payload)
     info = get_user_info(current.username)
+    unavailable_reason = (
+        "external_auth"
+        if POCKETBASE_ENABLED or info is None
+        else "environment_admin"
+        if current.user_id == "env-admin"
+        else None
+    )
     if info is None:
         # PocketBase-backed identities have no local record; fall back to the
         # token claims so the profile page still renders.
@@ -1121,15 +1128,8 @@ async def get_profile(
             username=current.username,
             role=current.role,
             created_at="",
-            password_change_unavailable_reason="external_auth",
+            password_change_unavailable_reason=unavailable_reason,
         )
-    unavailable_reason = (
-        "external_auth"
-        if POCKETBASE_ENABLED
-        else "environment_admin"
-        if current.user_id == "env-admin"
-        else None
-    )
     return ProfileInfo(
         **info,
         password_change_supported=unavailable_reason is None,
