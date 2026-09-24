@@ -79,7 +79,7 @@ import {
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
 import {
-  fileToPendingAttachment,
+  preparePendingAttachments,
   selectAttachmentFiles,
   type PendingAttachment,
 } from "@/features/chat/controllers/pending-attachments";
@@ -1454,8 +1454,6 @@ export default function ChatWorkspace({
     [capabilities, setCapability, setTools, userEnabledTools, watching, router],
   );
 
-  const fileToAttachment = fileToPendingAttachment;
-
   const showAttachmentError = useCallback((message: string) => {
     setAttachmentError(message);
     if (attachmentErrorTimer.current) {
@@ -1491,6 +1489,26 @@ export default function ChatWorkspace({
     [attachments, attachmentLimits, showAttachmentError, t],
   );
 
+  const prepareAndAppendFiles = useCallback(
+    async (files: File[]) => {
+      const { attachments: next, failures } =
+        await preparePendingAttachments(files);
+      if (failures.length) {
+        const first = failures[0];
+        showAttachmentError(
+          first.reason === "invalid_image"
+            ? t(
+                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                { name: first.name },
+              )
+            : t("Could not read file: {{name}}", { name: first.name }),
+        );
+      }
+      if (next.length) setAttachments((prev) => [...prev, ...next]);
+    },
+    [showAttachmentError, t],
+  );
+
   const handlePaste = useCallback(
     async (event: React.ClipboardEvent) => {
       const items = Array.from(event.clipboardData.items);
@@ -1501,10 +1519,9 @@ export default function ChatWorkspace({
       const accepted = filterAndReportFiles(files);
       if (!accepted.length) return;
       event.preventDefault();
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   const removeAttachment = useCallback((index: number) => {
@@ -1790,20 +1807,18 @@ export default function ChatWorkspace({
       dragCounter.current = 0;
       const accepted = filterAndReportFiles(Array.from(e.dataTransfer.files));
       if (!accepted.length) return;
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   const handleAddFiles = useCallback(
     async (files: File[]) => {
       const accepted = filterAndReportFiles(files);
       if (!accepted.length) return;
-      const next = await Promise.all(accepted.map(fileToAttachment));
-      setAttachments((prev) => [...prev, ...next]);
+      await prepareAndAppendFiles(accepted);
     },
-    [fileToAttachment, filterAndReportFiles],
+    [filterAndReportFiles, prepareAndAppendFiles],
   );
 
   // Connected subagents are stored as ``type: subagent`` KBs. Derive the

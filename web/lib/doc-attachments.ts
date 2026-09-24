@@ -157,6 +157,25 @@ export const TEXT_LIKE_EXTS = [
 
 export const SUPPORTED_DOC_EXTS = [...OFFICE_EXTS, ...TEXT_LIKE_EXTS] as const;
 
+/** Raster image extensions accepted by the composer.
+ *
+ * Only JPG/PNG/GIF/WebP are sent to model providers unchanged. The remaining
+ * formats are admitted here so the browser can convert them before upload.
+ */
+export const SUPPORTED_IMAGE_EXTS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".heic",
+  ".heif",
+  ".bmp",
+  ".tif",
+  ".tiff",
+] as const;
+
 export const SUPPORTED_DOC_MIMES = new Set<string>([
   // Office
   "application/pdf",
@@ -211,6 +230,7 @@ export const DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024;
  */
 export const ATTACHMENT_ACCEPT = [
   "image/*",
+  ...SUPPORTED_IMAGE_EXTS,
   ...SUPPORTED_DOC_EXTS,
   ...Array.from(SUPPORTED_DOC_MIMES),
 ].join(",");
@@ -237,6 +257,8 @@ export function classifyFile(file: File): FileKind | null {
   const ext = extOf(file.name);
   if (ext === ".svg" || file.type === "image/svg+xml") return "doc";
   if (file.type && file.type.startsWith("image/")) return "image";
+  if (ext && (SUPPORTED_IMAGE_EXTS as readonly string[]).includes(ext))
+    return "image";
   if (file.type && SUPPORTED_DOC_MIMES.has(file.type)) return "doc";
   if (ext && (SUPPORTED_DOC_EXTS as readonly string[]).includes(ext))
     return "doc";

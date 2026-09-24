@@ -2,6 +2,8 @@ import type { AttachmentLimits } from "@/lib/attachment-limits";
 import { classifyFile, isSvgFilename } from "@/lib/doc-attachments";
 import {
   extractBase64FromDataUrl,
+  InvalidImageAttachmentError,
+  prepareImageForModel,
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
 
@@ -56,15 +58,60 @@ export function selectAttachmentFiles(
 export async function fileToPendingAttachment(
   file: File,
 ): Promise<PendingAttachment> {
-  const raw = await readFileAsDataUrl(file);
   const svg = isSvgFilename(file.name) || file.type === "image/svg+xml";
-  const isImage = !svg && file.type.startsWith("image/");
+  const isImage = !svg && classifyFile(file) === "image";
+  if (isImage) {
+    const prepared = await prepareImageForModel(file);
+    const raw = await readFileAsDataUrl(prepared.blob);
+    return {
+      type: "image",
+      filename: prepared.filename,
+      base64: extractBase64FromDataUrl(raw),
+      previewUrl: raw,
+      size: prepared.blob.size,
+      mimeType: prepared.mimeType,
+    };
+  }
+
+  const raw = await readFileAsDataUrl(file);
   return {
-    type: isImage ? "image" : "file",
+    type: "file",
     filename: file.name,
     base64: extractBase64FromDataUrl(raw),
-    previewUrl: isImage || svg ? raw : undefined,
+    previewUrl: svg ? raw : undefined,
     size: file.size,
     mimeType: file.type || undefined,
   };
+}
+
+export interface AttachmentPreparationFailure {
+  name: string;
+  reason: "invalid_image" | "read_failed";
+}
+
+export async function preparePendingAttachments(files: File[]): Promise<{
+  attachments: PendingAttachment[];
+  failures: AttachmentPreparationFailure[];
+}> {
+  const attachments: PendingAttachment[] = [];
+  const failures: AttachmentPreparationFailure[] = [];
+
+  // Keep image decoding sequential. Mobile photos can be large, and the HEIC
+  // fallback owns a single codec worker; parallel conversion creates large
+  // memory spikes and can cross-wire worker callbacks.
+  for (const file of files) {
+    try {
+      attachments.push(await fileToPendingAttachment(file));
+    } catch (error) {
+      failures.push({
+        name: file.name || "image",
+        reason:
+          error instanceof InvalidImageAttachmentError
+            ? "invalid_image"
+            : "read_failed",
+      });
+    }
+  }
+
+  return { attachments, failures };
 }
