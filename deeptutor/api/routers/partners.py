@@ -14,6 +14,7 @@ import base64
 import binascii
 import json
 import logging
+import time
 from typing import Any, AsyncGenerator, Literal
 from uuid import uuid4
 
@@ -53,7 +54,9 @@ from deeptutor.services.partners.manager import (
     strip_legacy_global_delivery,
 )
 from deeptutor.services.partners.runtime_status import (
+    CHANNEL_RUNTIME_STALE_SECONDS,
     get_partner_runtime_status_repository,
+    sanitize_channel_runtime,
 )
 from deeptutor.services.partners.workspace import (
     list_assets,
@@ -102,6 +105,7 @@ _start_locks: dict[str, asyncio.Lock] = {}
 _start_locks_mutex = asyncio.Lock()
 _draft_confirm_locks: dict[tuple[str, str], asyncio.Lock] = {}
 _draft_confirm_locks_mutex = asyncio.Lock()
+_PARTNER_CONTROL_TIMEOUT_SECONDS = 20.0
 
 
 async def _get_start_lock(partner_id: str) -> asyncio.Lock:
@@ -146,12 +150,26 @@ async def _request_partner_control(
     if command is None:
         raise HTTPException(status_code=409, detail="Duplicate Partner lifecycle command")
 
-    deadline = asyncio.get_running_loop().time() + 20.0
+    deadline = asyncio.get_running_loop().time() + _PARTNER_CONTROL_TIMEOUT_SECONDS
     repository = get_partner_runtime_status_repository()
     while asyncio.get_running_loop().time() < deadline:
         status = repository.get(partner_id)
-        if status and float(status.get("runtime_updated_at") or 0) >= command.created_at:
+        if (
+            status
+            and float(
+                status.get("runtime_control_updated_at", status.get("runtime_updated_at")) or 0
+            )
+            >= command.created_at
+        ):
             state = str(status.get("runtime_state") or "")
+            if state in {"start_failed", "control_failed"}:
+                raise HTTPException(
+                    status_code=503 if state == "control_failed" else 500,
+                    detail=(
+                        status.get("last_reload_error")
+                        or "Partner startup failed. Retry the channel."
+                    ),
+                )
             if kind == BackgroundCommandKind.PARTNER_START and status.get("running"):
                 return status
             if kind == BackgroundCommandKind.PARTNER_STOP and not status.get("running"):
@@ -167,7 +185,18 @@ async def _request_partner_control(
                     )
                 return status
         await asyncio.sleep(0.05)
-    raise HTTPException(status_code=503, detail="Partner leader did not process the command")
+    message = "Partner leader did not process the command. Retry the channel."
+    previous = repository.get(partner_id) or {}
+    repository.set(
+        partner_id,
+        owner_id=str(previous.get("runtime_owner_id") or container.worker_id),
+        running=bool(previous.get("running")),
+        state="control_failed",
+        payload=previous,
+        started_at=previous.get("started_at"),
+        last_reload_error=message,
+    )
+    raise HTTPException(status_code=503, detail=message)
 
 
 async def _ensure_running_partner(
@@ -196,7 +225,10 @@ async def _ensure_running_partner(
         try:
             return await mgr.start_partner(partner_id, config)
         except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from None
+            raise HTTPException(
+                status_code=500,
+                detail=f"Partner startup failed ({type(exc).__name__}).",
+            ) from None
         except Exception as exc:
             logger.exception("Failed to auto-start partner '%s'", partner_id)
             raise HTTPException(status_code=500, detail="Failed to start partner") from exc
@@ -1131,19 +1163,50 @@ async def get_partner_channel_status(partner_id: str):
     if config is None:
         raise HTTPException(status_code=404, detail=t("api.partner_not_found"))
     source = config.channels if isinstance(config.channels, dict) else {}
-    channels = {
+    channels: dict[str, Any] = {
         name: {
             "enabled": bool(value.get("enabled")) if isinstance(value, dict) else False,
             "running": False,
-            "setup": {},
+            "setup": {"status": "disconnected"},
         }
         for name, value in source.items()
     }
-    if instance and instance.channel_manager:
-        # Merge instead of replacing so an enabled channel that could not be
-        # constructed (missing dependency, invalid allowlist, plugin absent)
-        # remains visible alongside live listeners.
-        channels.update(instance.channel_manager.get_status())
+    runtime = get_partner_runtime_status_repository().get(partner_id) or {}
+    updated_at = float(runtime.get("runtime_updated_at") or 0)
+    runtime_state = str(runtime.get("runtime_state") or "stopped")
+    running = bool(instance and instance.running)
+    if instance:
+        channels.update(mgr.channel_runtime_status(instance))
+        updated_at = time.time()
+        if not running and runtime_state == "running":
+            runtime_state = "stopped"
+    else:
+        shared = sanitize_channel_runtime(runtime.get("channel_runtime"))
+        channels.update({name: entry for name, entry in shared.items() if name in channels})
+        running = bool(runtime.get("running"))
+
+    runtime_error = None
+    if not instance and running and time.time() - updated_at >= CHANNEL_RUNTIME_STALE_SECONDS:
+        runtime_error = "Partner runtime is unavailable. Start the partner and retry."
+        runtime_state = "unavailable"
+        running = False
+    elif runtime_state in {"start_failed", "control_failed", "reload_failed"}:
+        runtime_error = (
+            runtime.get("last_reload_error") or "Partner startup failed. Retry the channel."
+        )
+    elif not instance and running and not runtime.get("channel_runtime"):
+        runtime_error = "Channel runtime status is unavailable. Retry the channel."
+
+    if runtime_error:
+        for entry in channels.values():
+            if entry["enabled"]:
+                entry["running"] = False
+                entry["setup"] = {
+                    "status": "unavailable" if runtime_state == "unavailable" else "error",
+                    "message": runtime_error,
+                    "error_code": runtime_state,
+                    "retryable": True,
+                }
 
     # QR rendering is intentionally server-side: it keeps channel bridges and
     # the web bundle dependency-free while ensuring their interactive output is
@@ -1157,7 +1220,9 @@ async def get_partner_channel_status(partner_id: str):
             setup["qr_data_url"] = _qr_data_url(str(payload))
     return {
         "partner_id": partner_id,
-        "running": bool(instance and instance.running),
+        "running": running,
+        "runtime_state": runtime_state,
+        "runtime_updated_at": updated_at,
         "channels": channels,
     }
 

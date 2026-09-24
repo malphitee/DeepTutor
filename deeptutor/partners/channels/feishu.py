@@ -391,7 +391,12 @@ class FeishuChannel(BaseChannel):
             try:
                 while self._running:
                     try:
-                        self.set_setup_state("connecting")
+                        # The SDK's blocking start() exposes no authentication
+                        # callback. Report the listener, including reconnects,
+                        # as running without claiming the socket is connected.
+                        # This thread owns status publication so a delayed
+                        # start cannot overwrite an error or stay connecting.
+                        self.set_setup_state("running")
                         self._ws_client.start()
                     except Exception as e:
                         logger.warning("Feishu WebSocket error: {}", e)
@@ -405,11 +410,9 @@ class FeishuChannel(BaseChannel):
                 ws_loop.close()
 
         self._ws_thread = threading.Thread(target=run_ws, daemon=True)
-        self._ws_thread.start()
-
         logger.info("Feishu bot started with WebSocket long connection")
         logger.info("No public IP required - using WebSocket to receive events")
-        self.set_setup_state("running")
+        self._ws_thread.start()
 
         # Keep running until stopped
         while self._running:

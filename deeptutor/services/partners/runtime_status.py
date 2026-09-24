@@ -10,6 +10,35 @@ from typing import Any
 
 from deeptutor.partners.config.paths import get_data_dir
 
+CHANNEL_RUNTIME_STALE_SECONDS = 30.0
+CHANNEL_STARTUP_TIMEOUT_SECONDS = 60.0
+
+
+def sanitize_channel_runtime(value: Any) -> dict[str, dict[str, Any]]:
+    """Project listener state only; channel config and plugin extras never persist."""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for name, entry in value.items():
+        if not isinstance(name, str) or not isinstance(entry, dict):
+            continue
+        raw_setup = entry.get("setup")
+        setup: dict[str, Any] = {}
+        if isinstance(raw_setup, dict):
+            for key in ("status", "message", "qr_payload", "error_code"):
+                if isinstance(raw_setup.get(key), str):
+                    setup[key] = raw_setup[key]
+            if isinstance(raw_setup.get("retryable"), bool):
+                setup["retryable"] = raw_setup["retryable"]
+        result[name] = {
+            "enabled": bool(entry.get("enabled")),
+            "running": bool(entry.get("running")),
+            "setup": setup,
+        }
+        if isinstance(entry.get("setup_updated_at"), (int, float)):
+            result[name]["setup_updated_at"] = entry["setup_updated_at"]
+    return result
+
 
 class PartnerRuntimeStatusRepository:
     """WAL SQLite projection written by the leader and read by every worker."""
@@ -50,10 +79,29 @@ class PartnerRuntimeStatusRepository:
         payload: dict[str, Any] | None = None,
         started_at: str | None = None,
         last_reload_error: str | None = None,
+        heartbeat: bool = False,
     ) -> dict[str, Any]:
-        updated_at = time.time()
+        now = time.time()
+        updated_at = now
         safe_payload = dict(payload or {})
         safe_payload.pop("channels", None)
+        safe_payload["channel_runtime"] = sanitize_channel_runtime(
+            safe_payload.get("channel_runtime")
+        )
+        previous = self.get(partner_id) if heartbeat else None
+        if state == "control_failed" and not heartbeat:
+            # A follower timing out knows only that the command failed. It
+            # cannot renew the leader's liveness lease with its own clock.
+            updated_at = float(safe_payload.get("runtime_updated_at") or 0)
+        # Heartbeats refresh liveness, never acknowledge an unprocessed command.
+        control_updated_at = (
+            previous.get("runtime_control_updated_at", previous.get("runtime_updated_at"))
+            if previous
+            else now
+        )
+        if heartbeat and previous and previous.get("runtime_state") == "control_failed":
+            state = "control_failed"
+            last_reload_error = previous.get("last_reload_error")
         safe_payload.update(
             {
                 "partner_id": partner_id,
@@ -63,6 +111,7 @@ class PartnerRuntimeStatusRepository:
                 "started_at": started_at,
                 "last_reload_error": last_reload_error,
                 "runtime_updated_at": updated_at,
+                "runtime_control_updated_at": control_updated_at,
             }
         )
         with self._connect() as connection:

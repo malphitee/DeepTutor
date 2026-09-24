@@ -225,11 +225,14 @@ export async function updatePartner(
   );
 }
 
-export async function startPartner(partnerId: string): Promise<PartnerInfo> {
+export async function startPartner(
+  partnerId: string,
+  signal?: AbortSignal,
+): Promise<PartnerInfo> {
   return json(
     await apiFetch(
       apiUrl(`/api/partners/${encodeURIComponent(partnerId)}/start`),
-      { method: "POST" },
+      { method: "POST", signal },
     ),
   );
 }
@@ -239,6 +242,18 @@ export async function stopPartner(partnerId: string): Promise<void> {
     await apiFetch(
       apiUrl(`/api/partners/${encodeURIComponent(partnerId)}/stop`),
       { method: "POST" },
+    ),
+  );
+}
+
+export async function reloadPartnerChannels(
+  partnerId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await json(
+    await apiFetch(
+      apiUrl(`/api/partners/${encodeURIComponent(partnerId)}/channels/reload`),
+      { method: "POST", signal },
     ),
   );
 }
@@ -377,21 +392,24 @@ export interface PartnerChannelRuntimeEntry {
   enabled: boolean;
   running: boolean;
   setup: PartnerChannelRuntimeSetup;
+  setup_updated_at?: number;
 }
 
 export interface PartnerChannelRuntimeResponse {
   partner_id: string;
   running: boolean;
   channels: Record<string, PartnerChannelRuntimeEntry>;
+  runtime_updated_at?: number;
 }
 
 export async function getPartnerChannelRuntime(
   partnerId: string,
+  signal?: AbortSignal,
 ): Promise<PartnerChannelRuntimeResponse> {
   return json(
     await apiFetch(
       apiUrl(`/api/partners/${encodeURIComponent(partnerId)}/channels/status`),
-      { cache: "no-store" },
+      { cache: "no-store", signal },
     ),
   );
 }
