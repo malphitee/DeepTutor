@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from deeptutor.__version__ import __version__
+from deeptutor.__version__ import get_runtime_version
 
 _ASCII_LOGO = r""" ____                  _____      _
 |  _ \  ___  ___ _ __ |_   _|   _| |_ ___  _ __
@@ -307,7 +307,7 @@ def render_banner(language: str | None, *, mode_key: str | None = None) -> Panel
     strings = LABELS[lang]
 
     logo = Text(_ASCII_LOGO, style="bold bright_cyan")
-    tagline_line = f"{strings['tagline']}  ·  v{__version__}"
+    tagline_line = f"{strings['tagline']}  ·  v{get_runtime_version()}"
 
     body = Text()
     body.append(logo)

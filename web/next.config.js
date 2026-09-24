@@ -75,10 +75,9 @@ const NEXT_PUBLIC_AUTH_ENABLED = normalizeBoolean(
 process.env.NEXT_PUBLIC_API_BASE = NEXT_PUBLIC_API_BASE;
 process.env.NEXT_PUBLIC_AUTH_ENABLED = NEXT_PUBLIC_AUTH_ENABLED;
 
-// Resolve the build-time application version from the single source of
-// truth at ``deeptutor/__version__.py``. The Python file is parsed with a
-// small regex so the JS build does not need to execute Python.
-const APP_VERSION = (() => {
+// Tagged Docker builds inject NEXT_PUBLIC_APP_VERSION from the Git tag. Source
+// builds fall back to deeptutor/__version__.py without executing Python.
+const SOURCE_APP_VERSION = (() => {
   try {
     const text = fs.readFileSync(
       path.resolve(__dirname, "..", "deeptutor", "__version__.py"),
@@ -89,6 +88,11 @@ const APP_VERSION = (() => {
   } catch {}
   return "";
 })();
+const APP_VERSION = firstNonEmpty(
+  process.env.NEXT_PUBLIC_APP_VERSION,
+  SOURCE_APP_VERSION,
+);
+process.env.NEXT_PUBLIC_APP_VERSION = APP_VERSION;
 
 const nextConfig = {
   // Keep the production build used by `deeptutor start` separate from the

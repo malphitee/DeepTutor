@@ -19,7 +19,7 @@ import uuid
 
 import httpx
 
-from deeptutor.__version__ import __version__
+from deeptutor.__version__ import get_runtime_version
 from deeptutor.runtime.home import get_runtime_home
 from deeptutor.runtime.process import is_process_alive
 from deeptutor.services.file_io import atomic_write_json
@@ -181,7 +181,7 @@ def detect_installation() -> Installation:
     if _running_in_container():
         return Installation(
             mode="docker",
-            current_version=__version__,
+            current_version=get_runtime_version(),
             automatic_update=False,
             command="docker pull ghcr.io/hkuds/deeptutor:latest",
             reason="Container images are updated and recreated by the Docker host.",
@@ -190,7 +190,7 @@ def detect_installation() -> Installation:
     if _running_from_source_checkout():
         return Installation(
             mode="source",
-            current_version=__version__,
+            current_version=get_runtime_version(),
             automatic_update=False,
             command="git pull && pip install -e .",
             reason="Source checkouts stay under the developer's Git workflow.",
@@ -200,7 +200,7 @@ def detect_installation() -> Installation:
     if direct_url is None:
         return Installation(
             mode="unknown",
-            current_version=__version__,
+            current_version=get_runtime_version(),
             automatic_update=False,
             command="pip install -U deeptutor",
             reason="The running DeepTutor distribution could not be identified.",
@@ -208,7 +208,7 @@ def detect_installation() -> Installation:
     if bool((direct_url.get("dir_info") or {}).get("editable")):
         return Installation(
             mode="source",
-            current_version=__version__,
+            current_version=get_runtime_version(),
             automatic_update=False,
             command="git pull && pip install -e .",
             reason="Source checkouts stay under the developer's Git workflow.",
@@ -218,14 +218,14 @@ def detect_installation() -> Installation:
     if not direct_url and in_virtualenv:
         return Installation(
             mode="pypi",
-            current_version=__version__,
+            current_version=get_runtime_version(),
             automatic_update=True,
             command="pip install -U deeptutor",
             reason="",
         )
     return Installation(
         mode="unknown",
-        current_version=__version__,
+        current_version=get_runtime_version(),
         automatic_update=False,
         command="pip install -U deeptutor",
         reason=(
@@ -272,7 +272,7 @@ class VersionCheckService:
                 return cached
             release = await self._fetch()
             result = VersionCheckResult(
-                current_version=__version__,
+                current_version=get_runtime_version(),
                 release=release,
                 checked_at=_now(),
                 cached=False,

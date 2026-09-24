@@ -14,6 +14,8 @@
 #   2. Configure provider profiles from the web Settings page or model_catalog.json
 # ============================================
 
+ARG APP_VERSION
+
 # ============================================
 # Stage 1: Frontend Builder
 # ============================================
@@ -35,16 +37,22 @@ RUN npm config set fetch-timeout 600000 && \
 # Copy frontend source code
 COPY web/ ./
 
-# Provide the single source of truth for the app version so next.config.js
-# can read it during ``npm run build`` and inline it into the bundle.
+# Provide the source-build fallback; tagged builds override it with APP_VERSION
+# before ``npm run build`` inlines the version into the browser bundle.
 COPY deeptutor/__version__.py /app/deeptutor/__version__.py
 
-# Create .env.local with the single env var the build needs (the app version,
-# exposed to the browser via next.config.js). URL knowledge is no longer baked
+# Declare the release version only after dependency installation so a new tag
+# does not invalidate the npm dependency cache.
+ARG APP_VERSION
+ENV NEXT_PUBLIC_APP_VERSION=${APP_VERSION}
+
+# Create .env.local with the tag-derived app version exposed to the browser via
+# next.config.js. An empty value keeps local builds on the source fallback.
+# URL knowledge is no longer baked
 # into the bundle: `apiUrl`/`wsUrl` in web/lib/api.ts are pass-throughs and
 # the actual backend host is read at request time by web/proxy.ts from
 # DEEPTUTOR_API_BASE_URL (exported by the entrypoint on every start).
-RUN printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local
+RUN printf 'NEXT_PUBLIC_APP_VERSION=%s\n' "$APP_VERSION" > .env.local
 
 # Build Next.js for production with standalone output
 # This allows runtime environment variable injection
@@ -174,6 +182,12 @@ COPY scripts/ ./scripts/
 COPY pyproject.toml ./
 COPY requirements/ ./requirements/
 COPY requirements.txt ./
+
+# Keep the tag-derived identity in the runtime and OCI metadata. This is
+# deliberately late so changing only the release tag reuses dependency layers.
+ARG APP_VERSION
+ENV DEEPTUTOR_APP_VERSION=${APP_VERSION}
+LABEL org.opencontainers.image.version="${APP_VERSION}"
 
 # Create necessary directories (these will be overwritten by volume mounts)
 RUN mkdir -p \
