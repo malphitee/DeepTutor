@@ -31,6 +31,29 @@ ignored. The one sanctioned exception is Docker/CI deployment injection of
 integration-process env vars via the narrow `INTEGRATION_PROCESS_OVERRIDE_KEYS`
 allowlist (see `CONTAINERIZATION.md`).
 
+## Development and Delivery Workflow
+
+All ordinary fixes and development work target the `dev` branch. Start from
+the latest remote `dev`, preserve unrelated working-tree changes, implement the
+smallest scoped fix, and run relevant local tests before delivery. Once tests
+pass, stage only the intended files, create a descriptive commit, push directly
+to `origin/dev`, and verify the resulting CI and development-image build. Do not
+open a PR to `main` for routine fixes unless the user explicitly requests one.
+
+A push to `dev` publishes development images only to CNB:
+
+- `docker.cnb.cool/johnnliu/deeptutor:dev`
+- `docker.cnb.cool/johnnliu/deeptutor:dev-<12-character-commit-sha>`
+
+Development pushes must not publish images or caches to GHCR, must not update
+`latest`, and must not create or move release tags. The user periodically merges
+`dev` into `main` manually and creates release tags manually. Only a version tag
+whose commit is already contained in `main` may publish production images. A
+production tag publishes the same verified multi-architecture digest to CNB
+first and additionally to `ghcr.io/malphitee/deeptutor`; stable tags may update
+`latest`. Never merge `dev` into `main` or create a release tag without an
+explicit user request.
+
 ### Level 1 — Tools
 
 Single-function tools the LLM picks on demand. Four user-toggleable tools

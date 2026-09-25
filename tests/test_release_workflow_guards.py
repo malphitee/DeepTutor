@@ -182,7 +182,7 @@ def test_docker_rejects_other_events_refs_and_deletions(tmp_path, event, ref, de
     assert not (tmp_path / "docker-output.txt").exists()
 
 
-def test_docker_publishes_one_build_to_both_owned_registries():
+def test_docker_routes_dev_to_cnb_and_releases_to_both_registries():
     document, publish_job_name = _workflow("docker")
     # PyYAML follows YAML 1.1, where the Actions key `on` is parsed as True.
     triggers = document[True]
@@ -205,9 +205,21 @@ def test_docker_publishes_one_build_to_both_owned_registries():
     assert logins["ghcr.io"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
     assert logins["docker.cnb.cool"]["username"] == "cnb"
     assert logins["docker.cnb.cool"]["password"] == "${{ secrets.CNB_TOKEN }}"
+    ghcr_login = next(
+        step
+        for step in steps
+        if step.get("with", {}).get("registry") == "ghcr.io"
+    )
+    assert ghcr_login["if"] == (
+        "needs.validate-release-tag.outputs.channel == 'production'"
+    )
 
     metadata = next(step["with"] for step in steps if step.get("id") == "meta")
-    assert metadata["images"].splitlines() == ["${{ env.GHCR_IMAGE }}", "${{ env.CNB_IMAGE }}"]
+    assert metadata["images"].splitlines() == [
+        "name=${{ env.CNB_IMAGE }}",
+        "name=${{ env.GHCR_IMAGE }},enable=${{ "
+        "needs.validate-release-tag.outputs.channel == 'production' }}",
+    ]
     assert metadata["tags"].splitlines() == [
         "type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}",
         "type=sha,format=short,prefix=dev-,enable=${{ "
@@ -227,8 +239,10 @@ def test_docker_publishes_one_build_to_both_owned_registries():
     assert builders[0]["platforms"] == "${{ matrix.platform }}"
     assert "tags" not in builders[0]
     assert builders[0]["outputs"] == (
-        'type=image,"name=${{ env.GHCR_IMAGE }},${{ env.CNB_IMAGE }}",'
-        "push-by-digest=true,name-canonical=true,push=true"
+        'type=image,"name=${{ env.CNB_IMAGE }}${{ '
+        "needs.validate-release-tag.outputs.channel == 'production' && "
+        "format(',{0}', env.GHCR_IMAGE) || '' }}\""
+        ",push-by-digest=true,name-canonical=true,push=true"
     )
     assert builders[0]["provenance"] is False
     assert builders[0]["sbom"] is False
@@ -273,11 +287,11 @@ def test_registry_cache_is_shared_across_dev_and_release_builds():
     document, _ = _workflow("docker")
     build = document["jobs"]["build-and-push"]
     builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
-    image = document["env"]["GHCR_IMAGE"]
+    image = document["env"]["CNB_IMAGE"]
 
     def cache_entries(value: str, arch: str, channel: str) -> list[dict[str, str]]:
         replacements = {
-            "${{ env.GHCR_IMAGE }}": image,
+            "${{ env.CNB_IMAGE }}": image,
             "${{ matrix.arch }}": arch,
             "${{ needs.validate-release-tag.outputs.channel }}": channel,
         }
@@ -336,7 +350,8 @@ def test_docker_validates_tag_ancestry_before_building():
 
 def _publication_fixture(tmp_path: Path, monkeypatch):
     """Exercise the actual publication script with a simulated Docker registry."""
-    images = ("ghcr.io/malphitee/deeptutor", "docker.cnb.cool/johnnliu/deeptutor")
+    images = ("docker.cnb.cool/johnnliu/deeptutor",)
+    ghcr_image = "ghcr.io/malphitee/deeptutor"
     digests = {"amd64": "sha256:" + "a" * 64, "arm64": "sha256:" + "b" * 64}
     directory = tmp_path / "digests"
     for arch, digest in digests.items():
@@ -344,8 +359,8 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
         artifact.mkdir(parents=True)
         (artifact / f"{arch}.digest").write_text(digest + "\n")
     tags = [f"{image}:{tag}" for image in images for tag in ("dev", "dev-0123456789ab")]
-    monkeypatch.setenv("GHCR_IMAGE", images[0])
-    monkeypatch.setenv("CNB_IMAGE", images[1])
+    monkeypatch.setenv("GHCR_IMAGE", ghcr_image)
+    monkeypatch.setenv("CNB_IMAGE", images[0])
     monkeypatch.setenv("DIGEST_DIR", str(directory))
     monkeypatch.setenv("METADATA_JSON", json.dumps({"tags": tags}))
     monkeypatch.setenv("PUBLICATION_CHANNEL", "test")
@@ -358,7 +373,7 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
         calls.append(command)
         assert command[:3] == ["docker", "buildx", "imagetools"]
         if command[3] == "create":
-            if behavior.get("push_failure") and images[1] in command[5]:
+            if behavior.get("push_failure") and images[0] in command[5]:
                 raise subprocess.CalledProcessError(1, command)
             return subprocess.CompletedProcess(command, 0)
         assert command[3] == "inspect"
@@ -375,10 +390,7 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
                 entries.pop()
             if behavior.get("wrong_child"):
                 entries[0]["digest"] = "sha256:" + "e" * 64
-            suffix = (
-                "d" if behavior.get("different_digest") and reference.startswith(images[1]) else "c"
-            )
-            result = {"digest": "sha256:" + suffix * 64, "manifests": entries}
+            result = {"digest": "sha256:" + "c" * 64, "manifests": entries}
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(result))
 
     monkeypatch.setattr(subprocess, "run", docker)
@@ -386,12 +398,12 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
     return script, directory, images, digests, tags, calls, behavior
 
 
-def test_manifest_publication_combines_same_digests_in_both_registries(tmp_path, monkeypatch):
+def test_dev_manifest_publication_only_targets_cnb(tmp_path, monkeypatch):
     script, _, images, digests, tags, calls, _ = _publication_fixture(tmp_path, monkeypatch)
     exec(compile(script, "publish-manifests", "exec"), {"__name__": "__main__"})
     creates = [call for call in calls if call[3] == "create"]
-    assert len(creates) == 2
-    assert all(call[3] == "inspect" for call in calls[:4])
+    assert len(creates) == 1
+    assert all(call[3] == "inspect" for call in calls[:2])
     for image, command in zip(images, creates, strict=True):
         assert command[-2:] == [f"{image}@{digest}" for digest in digests.values()]
         assert [command[i + 1] for i, value in enumerate(command) if value == "--tag"] == [
@@ -417,13 +429,13 @@ def test_manifest_publication_rejects_invalid_digest_artifacts(tmp_path, monkeyp
     assert calls == []
 
 
-@pytest.mark.parametrize("damage", ["foreign_repository", "unequal_tags", "invalid_tag"])
+@pytest.mark.parametrize("damage", ["foreign_repository", "missing_primary_tag", "invalid_tag"])
 def test_manifest_publication_rejects_unexpected_tags(tmp_path, monkeypatch, damage):
     script, _, _, _, tags, calls, _ = _publication_fixture(tmp_path, monkeypatch)
     if damage == "foreign_repository":
         tags.append("ghcr.io/unrelated/image:latest")
-    elif damage == "unequal_tags":
-        tags.pop()
+    elif damage == "missing_primary_tag":
+        tags.pop(0)
     else:
         tags[0] += ";unexpected"
     monkeypatch.setenv("METADATA_JSON", json.dumps({"tags": tags}))
@@ -440,7 +452,7 @@ def test_manifest_publication_rejects_wrong_source_arch_before_tagging(tmp_path,
     assert not any(call[3] == "create" for call in calls)
 
 
-@pytest.mark.parametrize("damage", ["missing_platform", "wrong_child", "different_digest"])
+@pytest.mark.parametrize("damage", ["missing_platform", "wrong_child"])
 def test_manifest_publication_fails_if_registry_result_is_inconsistent(
     tmp_path, monkeypatch, damage
 ):
