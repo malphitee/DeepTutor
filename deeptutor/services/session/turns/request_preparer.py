@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import uuid
 
 from deeptutor.core.stream import StreamEvent, StreamEventType
-from deeptutor.core.turn_request import TurnRequest
+from deeptutor.core.turn_request import OutgoingAttachment, TurnRequest
 from deeptutor.runtime.capability_routing import route_explicit_quiz_request
 from deeptutor.services.session.workspace_preferences import (
     WORKSPACE_MODE_MASTERY,
@@ -40,6 +40,24 @@ from .._turn_runtime_shared import (
 if TYPE_CHECKING:
     from deeptutor.runtime.coordination import RuntimeCoordinator
     from deeptutor.services.session.protocol import SessionStoreProtocol
+
+
+def _replay_attachments(value: Any) -> list[dict[str, Any]]:
+    """Convert persisted attachment records back to public request payloads.
+
+    Stored message attachments also carry server-owned presentation metadata
+    such as ``id`` and ``extracted_text``.  A regenerate is a new turn request,
+    so those fields must not cross the strict ``OutgoingAttachment`` boundary.
+    """
+
+    if not isinstance(value, list):
+        return []
+    public_fields = OutgoingAttachment.model_fields.keys()
+    return [
+        {key: item[key] for key in public_fields if key in item}
+        for item in value
+        if isinstance(item, dict)
+    ]
 
 
 class TurnRequestPreparer:
@@ -889,7 +907,7 @@ class TurnRequestPreparer:
             "skills": skills,
             "mcp": mcp,
             "language": language,
-            "attachments": list(last_user.get("attachments") or []),
+            "attachments": _replay_attachments(last_user.get("attachments")),
             "notebook_references": list(
                 overrides.get("notebook_references")
                 if overrides.get("notebook_references") is not None

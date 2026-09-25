@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pytest
 
 from deeptutor.core.stream import StreamEvent, StreamEventType
+from deeptutor.core.turn_request import TurnRequest
 from deeptutor.services.session.sqlite_store import SQLiteSessionStore
 from deeptutor.services.session.turn_runtime import (
     TurnRuntimeManager,
@@ -133,12 +134,21 @@ class _FakeStartTurnRecorder:
         )
 
 
+class _ValidatingStartTurnRecorder(_FakeStartTurnRecorder):
+    """Mirror ``start_turn``'s strict request validation before recording."""
+
+    async def __call__(self, payload: dict[str, Any]) -> tuple[dict, dict]:
+        validated = TurnRequest.model_validate(payload).to_payload()
+        return await super().__call__(validated)
+
+
 def _seed_session(
     store: SQLiteSessionStore,
     *,
     user_content: str = "what is 2+2?",
     assistant_content: str | None = "4",
     user_metadata: dict[str, Any] | None = None,
+    user_attachments: list[dict[str, Any]] | None = None,
 ) -> tuple[str, int, int | None]:
     """Create a session with a user (and optional assistant) message."""
     session = asyncio.run(store.create_session())
@@ -160,7 +170,11 @@ def _seed_session(
             role="user",
             content=user_content,
             capability="chat",
-            attachments=[{"type": "file", "filename": "a.pdf"}],
+            attachments=(
+                user_attachments
+                if user_attachments is not None
+                else [{"type": "file", "filename": "a.pdf"}]
+            ),
             metadata=user_metadata,
         )
     )
@@ -178,6 +192,39 @@ def _seed_session(
 
 
 class TestRegenerateLastTurn:
+    def test_persisted_attachment_metadata_is_not_replayed_as_request_input(
+        self, store: SQLiteSessionStore
+    ) -> None:
+        sid, _, _ = _seed_session(
+            store,
+            user_attachments=[
+                {
+                    "type": "image",
+                    "filename": "photo.jpg",
+                    "url": "/files/attachments/session/abc123/photo.jpg",
+                    "base64": "",
+                    "mime_type": "image/jpeg",
+                    "id": "f1f7bd49bd8d",
+                    "extracted_text": "server-only preview",
+                }
+            ],
+        )
+        runtime = TurnRuntimeManager(store=store)
+        recorder = _ValidatingStartTurnRecorder()
+
+        with patch.object(runtime, "start_turn", new=recorder):
+            asyncio.run(runtime.regenerate_last_turn(sid))
+
+        assert recorder.calls[0]["attachments"] == [
+            {
+                "type": "image",
+                "filename": "photo.jpg",
+                "url": "/files/attachments/session/abc123/photo.jpg",
+                "base64": "",
+                "mime_type": "image/jpeg",
+            }
+        ]
+
     def test_assistant_tail_is_deleted_and_payload_replays_user(
         self, store: SQLiteSessionStore
     ) -> None:
