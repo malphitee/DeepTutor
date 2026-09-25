@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
+import threading
 from typing import Any, Awaitable, Callable
 
 from deeptutor.agents.base_agent import BaseAgent
@@ -38,17 +40,85 @@ MAX_SUMMARY_OUTPUT_TOKENS = 16_384
 MAX_RAW_REBUILD_TOKENS = 131_072
 
 
-def count_tokens(text: str) -> int:
-    """Estimate token count with tiktoken when available."""
-    if not text:
-        return 0
+_TOKEN_ENCODING: Any | None = None
+_TOKEN_ENCODING_LOADING = False
+_TOKEN_ENCODING_LOAD_FAILED = False
+_TOKEN_ENCODING_LOCK = threading.Lock()
+
+
+def _approximate_token_count(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _load_token_encoding() -> Any | None:
+    """Load tiktoken off the event loop and publish the cached encoder."""
+
+    global _TOKEN_ENCODING, _TOKEN_ENCODING_LOADING, _TOKEN_ENCODING_LOAD_FAILED
     try:
         import tiktoken
 
         encoding = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        with _TOKEN_ENCODING_LOCK:
+            _TOKEN_ENCODING_LOADING = False
+            _TOKEN_ENCODING_LOAD_FAILED = True
+        return None
+    with _TOKEN_ENCODING_LOCK:
+        _TOKEN_ENCODING = encoding
+        _TOKEN_ENCODING_LOADING = False
+        _TOKEN_ENCODING_LOAD_FAILED = False
+    return encoding
+
+
+def _schedule_token_encoding_load(loop: asyncio.AbstractEventLoop) -> None:
+    global _TOKEN_ENCODING_LOADING
+    with _TOKEN_ENCODING_LOCK:
+        if _TOKEN_ENCODING is not None or _TOKEN_ENCODING_LOADING or _TOKEN_ENCODING_LOAD_FAILED:
+            return
+        _TOKEN_ENCODING_LOADING = True
+    try:
+        loop.run_in_executor(None, _load_token_encoding)
+    except RuntimeError:
+        with _TOKEN_ENCODING_LOCK:
+            _TOKEN_ENCODING_LOADING = False
+
+
+def _load_token_encoding_synchronously() -> Any | None:
+    global _TOKEN_ENCODING_LOADING
+    with _TOKEN_ENCODING_LOCK:
+        if _TOKEN_ENCODING is not None:
+            return _TOKEN_ENCODING
+        if _TOKEN_ENCODING_LOADING or _TOKEN_ENCODING_LOAD_FAILED:
+            return None
+        _TOKEN_ENCODING_LOADING = True
+    return _load_token_encoding()
+
+
+def count_tokens(text: str) -> int:
+    """Estimate tokens without cold-loading tiktoken on an event loop.
+
+    ``tiktoken.get_encoding`` may synchronously download its vocabulary on the
+    first call in a fresh container. Async request paths use the existing
+    approximation for that first count while a worker thread warms the shared
+    encoder; synchronous callers may load it directly.
+    """
+    if not text:
+        return 0
+    encoding = _TOKEN_ENCODING
+    if encoding is None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            encoding = _load_token_encoding_synchronously()
+        else:
+            _schedule_token_encoding_load(loop)
+            return _approximate_token_count(text)
+    if encoding is None:
+        return _approximate_token_count(text)
+    try:
         return len(encoding.encode(text))
     except Exception:
-        return max(1, len(text) // 4)
+        return _approximate_token_count(text)
 
 
 def trim_incomplete_tail(text: str) -> str:

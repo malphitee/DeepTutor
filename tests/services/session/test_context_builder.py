@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,6 +42,50 @@ class TestCountTokens:
         short = count_tokens("Hi")
         long = count_tokens("Hello, this is a longer sentence with many words in it.")
         assert long > short
+
+    @pytest.mark.asyncio
+    async def test_cold_encoding_load_does_not_block_event_loop(self, monkeypatch) -> None:
+        from deeptutor.services.session import context_builder
+
+        class _Encoding:
+            @staticmethod
+            def encode(text: str) -> list[str]:
+                return text.split()
+
+        load_started = threading.Event()
+        release_load = threading.Event()
+
+        def _slow_get_encoding(_name: str) -> _Encoding:
+            load_started.set()
+            release_load.wait(timeout=0.5)
+            return _Encoding()
+
+        monkeypatch.setattr(context_builder, "_TOKEN_ENCODING", None, raising=False)
+        monkeypatch.setattr(context_builder, "_TOKEN_ENCODING_LOADING", False, raising=False)
+        monkeypatch.setattr(context_builder, "_TOKEN_ENCODING_LOAD_FAILED", False, raising=False)
+        monkeypatch.setattr("tiktoken.get_encoding", _slow_get_encoding)
+
+        async def _release_after_event_loop_tick() -> None:
+            await asyncio.sleep(0.02)
+            release_load.set()
+
+        release_task = asyncio.create_task(_release_after_event_loop_tick())
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        estimated = count_tokens("one two three four")
+        elapsed = loop.time() - started_at
+
+        assert estimated > 0
+        assert elapsed < 0.1
+        await release_task
+        assert await asyncio.to_thread(load_started.wait, 1.0)
+
+        for _ in range(100):
+            if context_builder._TOKEN_ENCODING is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert context_builder._TOKEN_ENCODING is not None
+        assert count_tokens("one two") == 2
 
 
 # ---------------------------------------------------------------------------
