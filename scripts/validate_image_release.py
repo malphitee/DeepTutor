@@ -35,8 +35,14 @@ def validate_publication(environment: Mapping[str, str]) -> dict[str, str]:
         raise ValueError(
             f"Unsupported publication event {event!r} for {ref!r}: require an undeleted push."
         )
+    if ref == "refs/heads/dev":
+        return {
+            "image_tag": "dev",
+            "is_stable": "false",
+            "channel": "test",
+        }
     if not ref.startswith("refs/tags/"):
-        raise ValueError(f"Only a version tag can publish images, got {ref!r}.")
+        raise ValueError(f"Only dev or a version tag can publish images, got {ref!r}.")
     tag = ref.removeprefix("refs/tags/")
     image_tag, is_stable = parse_release_tag(tag)
     return {

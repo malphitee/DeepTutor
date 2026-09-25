@@ -1,7 +1,7 @@
 name: Docker Images
 
 # Build each architecture once and publish the same image to both registries.
-# Version-tag pushes from main publish production images.
+# Pushes to dev publish development images; version tags from main publish production images.
 # Only stable version tags update latest. This fork owns both destinations below.
 #
 # GHCR: ghcr.io/malphitee/deeptutor
@@ -9,12 +9,14 @@ name: Docker Images
 
 on:
   push:
+    branches:
+      - dev
     tags:
       - 'v*'
 
-# Serialize different production tags so aliases are advanced in order.
+# Serialize each publication channel, including different production tags.
 concurrency:
-  group: docker-images-production
+  group: docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}
   cancel-in-progress: false
 
 permissions:
@@ -30,7 +32,7 @@ env:
 jobs:
   validate-release-tag:
     name: Validate publication event
-    if: github.repository == 'malphitee/DeepTutor' && github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'malphitee/DeepTutor' && github.event_name == 'push' && !github.event.deleted && (github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.validate.outputs.image_tag }}
@@ -43,6 +45,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify version tag is contained in main
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           RELEASE_BRANCH: ${{ env.RELEASE_BRANCH }}
@@ -58,7 +61,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Validate version-tag push
+      - name: Validate dev or version-tag push
         id: validate
         run: python scripts/validate_image_release.py
         env:
@@ -122,6 +125,7 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
+            type=sha,format=short,prefix=dev-,enable=${{ needs.validate-release-tag.outputs.channel == 'test' }}
             type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Build and push
@@ -141,15 +145,16 @@ jobs:
           # No public tags until both architectures have reached both registries.
           outputs: type=image,"name=${{ env.GHCR_IMAGE }},${{ env.CNB_IMAGE }}",push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          # Import the shared production cache; keep the old GHA cache as a
-          # fallback while registry caches warm up.
+          # Both channels can reuse dependency layers, while each writes only
+          # its own cache so frequent dev builds cannot replace release state.
           cache-from: |
+            type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-test-${{ matrix.arch }}
             type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-production-${{ matrix.arch }}
             type=gha,scope=deeptutor-${{ matrix.arch }}
           # mode=max includes the npm and Python builder stages, not only the
           # final runtime image. Cache export is best-effort; publishing the
           # actual images is not.
-          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-production-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
+          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache-${{ needs.validate-release-tag.outputs.channel }}-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Record published digest
         shell: python
@@ -222,6 +227,7 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
+            type=sha,format=short,prefix=dev-,enable=${{ needs.validate-release-tag.outputs.channel == 'test' }}
             type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
 
       - name: Publish and verify manifests

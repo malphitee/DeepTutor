@@ -72,7 +72,7 @@ def test_publication_events_are_guarded(publication: str) -> None:
     assert validator["if"] == (
         "github.repository == 'malphitee/DeepTutor' && "
         "github.event_name == 'push' && !github.event.deleted && "
-        "startsWith(github.ref, 'refs/tags/v')"
+        "(github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))"
     )
     assert document["jobs"][publish_job_name]["needs"] == "validate-release-tag"
 
@@ -151,6 +151,15 @@ def test_version_push_selects_production_and_only_plain_versions_are_stable(
     )
 
 
+def test_dev_push_selects_test_channel_and_moving_tag(tmp_path: Path) -> None:
+    result = _run_validator("docker", "", tmp_path, ref="refs/heads/dev")
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "docker-output.txt").read_text() == (
+        "image_tag=dev\nis_stable=false\nchannel=test\n"
+    )
+
+
 @pytest.mark.parametrize(
     ("event", "ref", "deleted"),
     [
@@ -159,7 +168,6 @@ def test_version_push_selects_production_and_only_plain_versions_are_stable(
         ("push", "refs/heads/dev-copy", False),
         ("push", "refs/tags/dev", False),
         ("push", "refs/tags/1.2.3", False),
-        ("push", "refs/heads/dev", False),
         ("push", "refs/heads/dev", True),
         ("push", "refs/tags/v1.2.3", True),
         ("release", "refs/tags/v1.2.3", False),
@@ -178,10 +186,12 @@ def test_docker_publishes_one_build_to_both_owned_registries():
     document, publish_job_name = _workflow("docker")
     # PyYAML follows YAML 1.1, where the Actions key `on` is parsed as True.
     triggers = document[True]
-    assert triggers == {"push": {"tags": ["v*"]}}
+    assert triggers == {"push": {"branches": ["dev"], "tags": ["v*"]}}
     assert document["permissions"]["packages"] == "write"
     assert document["concurrency"]["cancel-in-progress"] is False
-    assert document["concurrency"]["group"] == "docker-images-production"
+    assert document["concurrency"]["group"] == (
+        "docker-images-${{ startsWith(github.ref, 'refs/tags/') && 'production' || 'dev' }}"
+    )
     assert document["env"]["GHCR_IMAGE"] == "ghcr.io/malphitee/deeptutor"
     assert document["env"]["CNB_IMAGE"] == "docker.cnb.cool/johnnliu/deeptutor"
     assert document["env"]["RELEASE_BRANCH"] == "main"
@@ -200,6 +210,8 @@ def test_docker_publishes_one_build_to_both_owned_registries():
     assert metadata["images"].splitlines() == ["${{ env.GHCR_IMAGE }}", "${{ env.CNB_IMAGE }}"]
     assert metadata["tags"].splitlines() == [
         "type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}",
+        "type=sha,format=short,prefix=dev-,enable=${{ "
+        "needs.validate-release-tag.outputs.channel == 'test' }}",
         "type=raw,value=latest,enable=${{ "
         "needs.validate-release-tag.outputs.channel == 'production' && "
         "needs.validate-release-tag.outputs.is_stable == 'true' }}",
@@ -256,8 +268,8 @@ def test_native_architecture_builds_only_publish_tags_after_both_succeed():
     assert publisher["env"]["IMAGE_TAG"] == "${{ needs.validate-release-tag.outputs.image_tag }}"
 
 
-def test_registry_cache_is_shared_across_release_tags():
-    """New version tags must reuse the shared production dependency cache."""
+def test_registry_cache_is_shared_across_dev_and_release_builds():
+    """Dev and releases may read both caches but write only their own channel."""
     document, _ = _workflow("docker")
     build = document["jobs"]["build-and-push"]
     builder = next(step["with"] for step in build["steps"] if step.get("id") == "build")
@@ -274,29 +286,33 @@ def test_registry_cache_is_shared_across_release_tags():
         assert "${{" not in value
         return [dict(part.split("=", 1) for part in line.split(",")) for line in value.splitlines()]
 
-    writers: dict[str, str] = {}
-    readers: dict[str, set[str]] = {}
-    for platform in build["strategy"]["matrix"]["include"]:
-        arch = platform["arch"]
-        exports = cache_entries(builder["cache-to"], arch, "production")
-        assert len(exports) == 1
-        export = exports[0]
-        assert export["type"] == "registry"
-        assert export["mode"] == "max"
-        assert export["ignore-error"] == "true"
-        assert export["image-manifest"] == export["oci-mediatypes"] == "true"
-        assert export["ref"] == f"{image}:buildcache-production-{arch}"
-        writers[arch] = export["ref"]
+    writers: dict[tuple[str, str], str] = {}
+    for channel in ("test", "production"):
+        for platform in build["strategy"]["matrix"]["include"]:
+            arch = platform["arch"]
+            exports = cache_entries(builder["cache-to"], arch, channel)
+            assert len(exports) == 1
+            export = exports[0]
+            assert export["type"] == "registry"
+            assert export["mode"] == "max"
+            assert export["ignore-error"] == "true"
+            assert export["image-manifest"] == export["oci-mediatypes"] == "true"
+            assert export["ref"] == f"{image}:buildcache-{channel}-{arch}"
+            writers[(channel, arch)] = export["ref"]
 
-        imports = cache_entries(builder["cache-from"], arch, "production")
-        readers[arch] = {entry["ref"] for entry in imports if entry["type"] == "registry"}
-        assert readers[arch] == {writers[arch]}
-        assert {entry["scope"] for entry in imports if entry["type"] == "gha"} == {
-            f"deeptutor-{arch}"
-        }
+            imports = cache_entries(builder["cache-from"], arch, channel)
+            registry_sources = {
+                entry["ref"] for entry in imports if entry["type"] == "registry"
+            }
+            assert registry_sources == {
+                f"{image}:buildcache-test-{arch}",
+                f"{image}:buildcache-production-{arch}",
+            }
+            assert {entry["scope"] for entry in imports if entry["type"] == "gha"} == {
+                f"deeptutor-{arch}"
+            }
 
-    assert len(set(writers.values())) == len(writers) == 2
-    assert all(sources == {writers[arch]} for arch, sources in readers.items())
+    assert len(set(writers.values())) == len(writers) == 4
     assert "ignore-error" not in builder["outputs"]
 
 
