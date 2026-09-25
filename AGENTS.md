@@ -44,15 +44,17 @@ A push to `dev` publishes development images only to CNB:
 
 - `docker.cnb.cool/johnnliu/deeptutor:dev`
 - `docker.cnb.cool/johnnliu/deeptutor:dev-<12-character-commit-sha>`
+- `docker.cnb.cool/johnnliu/deeptutor:latest`
 
-Development pushes must not publish images or caches to GHCR, must not update
-`latest`, and must not create or move release tags. The user periodically merges
-`dev` into `main` manually and creates release tags manually. Only a version tag
-whose commit is already contained in `main` may publish production images. A
-production tag publishes the same verified multi-architecture digest to CNB
-first and additionally to `ghcr.io/malphitee/deeptutor`; stable tags may update
-`latest`. Never merge `dev` into `main` or create a release tag without an
-explicit user request.
+Development pushes must not publish images or caches to GHCR and must not create
+or move release tags. A successful development publication moves the CNB
+`latest` alias to the same verified multi-architecture digest as `dev` and
+`dev-<sha>`. The user periodically merges `dev` into `main` manually and creates
+release tags manually. Only a version tag whose commit is already contained in
+`main` may publish production images. A production tag publishes the same
+verified multi-architecture digest to CNB first and additionally to
+`ghcr.io/malphitee/deeptutor`; stable tags may update `latest`. Never merge `dev`
+into `main` or create a release tag without an explicit user request.
 
 ### Level 1 — Tools
 

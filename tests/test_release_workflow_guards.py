@@ -113,7 +113,7 @@ def test_malformed_version_tags_fail_the_guard(publication: str, tag: str, tmp_p
     assert repr(tag) in result.stderr
 
 
-def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> None:
+def test_docker_uses_validated_tag_and_channel_latest_rules(tmp_path: Path) -> None:
     result = _run_validator("docker", "v1.2.3-rc.1", tmp_path)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "docker-output.txt").read_text() == (
@@ -128,6 +128,7 @@ def test_docker_uses_validated_tag_and_stable_latest_only(tmp_path: Path) -> Non
     assert "needs.validate-release-tag.outputs.image_tag" in tags
     assert "needs.validate-release-tag.outputs.is_stable == 'true'" in tags
     assert "needs.validate-release-tag.outputs.channel == 'production'" in tags
+    assert "needs.validate-release-tag.outputs.channel == 'test'" in tags
     assert metadata["with"]["flavor"] == "latest=false"
 
 
@@ -225,8 +226,9 @@ def test_docker_routes_dev_to_cnb_and_releases_to_both_registries():
         "type=sha,format=short,prefix=dev-,enable=${{ "
         "needs.validate-release-tag.outputs.channel == 'test' }}",
         "type=raw,value=latest,enable=${{ "
-        "needs.validate-release-tag.outputs.channel == 'production' && "
-        "needs.validate-release-tag.outputs.is_stable == 'true' }}",
+        "needs.validate-release-tag.outputs.channel == 'test' || "
+        "(needs.validate-release-tag.outputs.channel == 'production' && "
+        "needs.validate-release-tag.outputs.is_stable == 'true') }}",
     ]
     assert document["env"]["DOCKER_METADATA_SHORT_SHA_LENGTH"] == "12"
     builders = [
@@ -358,7 +360,11 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
         artifact = directory / f"image-digests-{arch}"
         artifact.mkdir(parents=True)
         (artifact / f"{arch}.digest").write_text(digest + "\n")
-    tags = [f"{image}:{tag}" for image in images for tag in ("dev", "dev-0123456789ab")]
+    tags = [
+        f"{image}:{tag}"
+        for image in images
+        for tag in ("dev", "dev-0123456789ab", "latest")
+    ]
     monkeypatch.setenv("GHCR_IMAGE", ghcr_image)
     monkeypatch.setenv("CNB_IMAGE", images[0])
     monkeypatch.setenv("DIGEST_DIR", str(directory))

@@ -2,7 +2,8 @@ name: Docker Images
 
 # Build each architecture once and publish the same image to both registries.
 # Pushes to dev publish development images; version tags from main publish production images.
-# Only stable version tags update latest. This fork owns both destinations below.
+# Dev pushes update latest on CNB; stable version tags update latest on every
+# selected registry. This fork owns both destinations below.
 #
 # GHCR: ghcr.io/malphitee/deeptutor
 # CNB:  docker.cnb.cool/johnnliu/deeptutor
@@ -127,7 +128,7 @@ jobs:
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
             type=sha,format=short,prefix=dev-,enable=${{ needs.validate-release-tag.outputs.channel == 'test' }}
-            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
+            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'test' || (needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true') }}
 
       - name: Build and push
         id: build
@@ -230,7 +231,7 @@ jobs:
           tags: |
             type=raw,value=${{ needs.validate-release-tag.outputs.image_tag }}
             type=sha,format=short,prefix=dev-,enable=${{ needs.validate-release-tag.outputs.channel == 'test' }}
-            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true' }}
+            type=raw,value=latest,enable=${{ needs.validate-release-tag.outputs.channel == 'test' || (needs.validate-release-tag.outputs.channel == 'production' && needs.validate-release-tag.outputs.is_stable == 'true') }}
 
       - name: Publish and verify manifests
         id: publish
