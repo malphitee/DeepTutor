@@ -56,6 +56,17 @@ verified multi-architecture digest to CNB first and additionally to
 `ghcr.io/malphitee/deeptutor`; stable tags may update `latest`. Never merge `dev`
 into `main` or create a release tag without an explicit user request.
 
+After a successful development-image publication, delivery also includes
+upgrading the user's test deployment on SSH host `panel2-tx`. Its 1Panel Compose
+project is `/opt/1panel/docker/compose/deeptutor/docker-compose.yml`, service
+`deeptutor`, using the CNB `latest` alias. Verify the published image digest and
+commit revision before recreating only this service, and retain the previous
+image for rollback. Preserve the Compose configuration and its `./data:/app/data`
+bind mount; do not stop unrelated services or remove volumes/data. After the
+upgrade, verify the running image revision, container health, and frontend/API
+availability. Report publication and deployment separately if an upgrade cannot
+be completed. This is part of agent-led delivery, not an unattended CI deployment.
+
 ### Level 1 — Tools
 
 Single-function tools the LLM picks on demand. Four user-toggleable tools
