@@ -66,6 +66,13 @@ def test_release_tag_is_the_authoritative_image_version(
     )
 
 
+def test_dev_branch_push_selects_the_moving_development_image(tmp_path: Path) -> None:
+    result, output = run_validator(tmp_path, ref="refs/heads/dev")
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "image_tag=dev\nis_stable=false\nchannel=test\n"
+
+
 @pytest.mark.parametrize(
     "tag",
     [
@@ -110,7 +117,6 @@ def test_noncanonical_release_tags_fail_without_outputs(tmp_path: Path, tag: str
         ("workflow_dispatch", "refs/heads/dev", "false"),
         ("pull_request", "refs/heads/dev", "false"),
         ("push", "refs/tags/v1.2.3", "true"),
-        ("push", "refs/heads/dev", "false"),
         ("push", "refs/heads/dev", "true"),
         ("push", "refs/heads/dev", "unexpected"),
         ("push", "refs/heads/main", "false"),

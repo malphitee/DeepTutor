@@ -135,7 +135,15 @@ def main() -> None:
     if len(set(digests.values())) != 2:
         raise SystemExit("Platform digests must be distinct")
 
-    images = (os.environ["GHCR_IMAGE"], os.environ["CNB_IMAGE"])
+    channel = os.environ["PUBLICATION_CHANNEL"]
+    image_tag = os.environ["IMAGE_TAG"]
+    if channel not in {"test", "production"}:
+        raise SystemExit("Invalid publication channel")
+    images = (
+        (os.environ["CNB_IMAGE"],)
+        if channel == "test"
+        else (os.environ["CNB_IMAGE"], os.environ["GHCR_IMAGE"])
+    )
     tags = json.loads(os.environ["METADATA_JSON"])["tags"]
     if not isinstance(tags, list) or not tags or not all(isinstance(tag, str) for tag in tags):
         raise SystemExit("Expected nonempty unique publication tags")
@@ -152,12 +160,10 @@ def main() -> None:
             raise SystemExit(f"Unexpected publication destination: {tag}")
         tags_by_image[image].append(tag)
     suffixes = [{tag.rpartition(":")[2] for tag in tags_by_image[image]} for image in images]
-    if not suffixes[0] or suffixes[0] != suffixes[1]:
-        raise SystemExit("Both registries must receive the same tags")
+    if not all(suffixes) or len({frozenset(items) for items in suffixes}) != 1:
+        raise SystemExit("Publication registries must receive the same tags")
 
-    channel = os.environ["PUBLICATION_CHANNEL"]
-    image_tag = os.environ["IMAGE_TAG"]
-    if channel not in {"test", "production"} or image_tag not in suffixes[0]:
+    if image_tag not in suffixes[0]:
         raise SystemExit("Invalid publication channel or missing image tag")
     version_pattern = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
     if (channel == "test" and image_tag != "dev") or (
@@ -168,7 +174,7 @@ def main() -> None:
     ):
         raise SystemExit("Invalid image tag for publication channel")
 
-    # Both registries must have both runnable platforms before moving any tag.
+    # Every selected registry must have both runnable platforms before moving any tag.
     for image in images:
         for arch in ARCHITECTURES:
             config = inspect(f"{image}@{digests[arch]}", "Image")
@@ -188,9 +194,13 @@ def main() -> None:
     if len(index_digests) != 1:
         raise SystemExit("Published tags or registries have different image digests")
     digest = index_digests.pop()
-    print(f"Verified linux/amd64 and linux/arm64 in both registries: {digest}")
+    destinations = ", ".join(images)
+    print(f"Verified linux/amd64 and linux/arm64 in {destinations}: {digest}")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-        summary.write(f"Both registries verified at `{digest}` (linux/amd64, linux/arm64).\n\n")
+        summary.write(
+            f"Publication targets verified at `{digest}` "
+            "(linux/amd64, linux/arm64).\n\n"
+        )
         summary.writelines(f"- `{tag}`\n" for tag in tags)
 
 

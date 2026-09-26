@@ -333,6 +333,91 @@ async def test_rag_tool_falls_back_to_query_echo(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
+async def test_rag_tool_reports_successful_empty_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-hit search must remain visible instead of becoming empty tool output."""
+
+    async def fake_rag_search(**_kwargs: Any) -> dict[str, Any]:
+        return {"answer": "", "content": "", "sources": [], "provider": "ima"}
+
+    _install_module(monkeypatch, "deeptutor.tools.rag_tool", rag_search=fake_rag_search)
+
+    result = await RAGTool().execute(query="what is a tensor", kb_name="demo-kb")
+
+    assert result.content == (
+        "No matching content was found in knowledge base 'demo-kb'. "
+        "The search completed successfully."
+    )
+    assert result.sources == []
+    assert result.success is True
+    assert "error_type" not in result.metadata
+
+
+@pytest.mark.asyncio
+async def test_rag_tool_does_not_disguise_errors_as_empty_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_rag_search(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "answer": "",
+            "content": "",
+            "sources": [],
+            "provider": "ima",
+            "error_type": "retrieval_error",
+        }
+
+    _install_module(monkeypatch, "deeptutor.tools.rag_tool", rag_search=fake_rag_search)
+
+    result = await RAGTool().execute(query="what is a tensor", kb_name="demo-kb")
+
+    assert result.content == "Knowledge base 'demo-kb' search failed (retrieval_error)."
+    assert result.sources == []
+    assert result.success is False
+    assert result.metadata["error_type"] == "retrieval_error"
+
+
+@pytest.mark.asyncio
+async def test_rag_tool_preserves_ima_failure_message_without_claiming_a_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed remote search is not a completed retrieval or a citable match."""
+
+    async def fake_rag_search(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "answer": "Could not reach Tencent IMA. Try again shortly.",
+            "content": "",
+            "sources": [],
+            "provider": "ima",
+            "error_type": "retrieval_error",
+        }
+
+    _install_module(monkeypatch, "deeptutor.tools.rag_tool", rag_search=fake_rag_search)
+
+    result = await RAGTool().execute(query="multiplication", kb_name="demo-kb")
+
+    assert result.content == "Could not reach Tencent IMA. Try again shortly."
+    assert result.sources == []
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_rag_tool_does_not_report_reindex_required_as_no_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_rag_search(**_kwargs: Any) -> dict[str, Any]:
+        return {"answer": "", "content": "", "sources": [], "needs_reindex": True}
+
+    _install_module(monkeypatch, "deeptutor.tools.rag_tool", rag_search=fake_rag_search)
+
+    result = await RAGTool().execute(query="multiplication", kb_name="demo-kb")
+
+    assert result.content == "Knowledge base 'demo-kb' needs reindexing before it can be searched."
+    assert result.sources == []
+    assert result.success is False
+
+
+@pytest.mark.asyncio
 async def test_rag_tool_rejects_empty_query(monkeypatch: pytest.MonkeyPatch) -> None:
     called = False
 
@@ -557,6 +642,15 @@ async def test_paper_search_tool_formats_papers(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_geogebra_analysis_tool_handles_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "white").save(image, format="PNG")
+    encoded = base64.b64encode(image.getvalue()).decode("ascii")
+
     class FakeVisionSolverAgent:
         def __init__(self, **kwargs: Any) -> None:
             self.kwargs = kwargs
@@ -589,7 +683,7 @@ async def test_geogebra_analysis_tool_handles_success(monkeypatch: pytest.Monkey
 
     result = await GeoGebraAnalysisTool().execute(
         question="analyze this",
-        image_base64="ZmFrZQ==",
+        image_base64=encoded,
         language="en",
     )
 

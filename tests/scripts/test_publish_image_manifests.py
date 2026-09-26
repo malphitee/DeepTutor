@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "publish_image_manifests.py"
-IMAGES = ("ghcr.io/malphitee/deeptutor", "docker.cnb.cool/johnnliu/deeptutor")
+IMAGES = ("docker.cnb.cool/johnnliu/deeptutor", "ghcr.io/malphitee/deeptutor")
 DIGESTS = {"amd64": "sha256:" + "a" * 64, "arm64": "sha256:" + "b" * 64}
 INDEX_DIGEST = "sha256:" + "c" * 64
 
@@ -44,8 +44,8 @@ def publication(tmp_path, monkeypatch):
             suffixes.append("latest")
         tags = [f"{image}:{suffix}" for image in IMAGES for suffix in suffixes]
         environment = {
-            "GHCR_IMAGE": IMAGES[0],
-            "CNB_IMAGE": IMAGES[1],
+            "CNB_IMAGE": IMAGES[0],
+            "GHCR_IMAGE": IMAGES[1],
             "DIGEST_DIR": str(directory),
             "METADATA_JSON": json.dumps({"tags": tags}),
             "PUBLICATION_CHANNEL": "production",

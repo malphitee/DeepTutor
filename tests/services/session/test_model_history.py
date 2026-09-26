@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
+from io import BytesIO
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,7 +11,9 @@ import pytest
 
 from deeptutor.services.session.context_builder import ContextBuilder, _ContextSummaryAgent
 from deeptutor.services.session.model_history import (
+    archive_model_images,
     complete_tool_results,
+    model_messages_token_count,
     normalize_model_turn,
     replay_history,
 )
@@ -114,6 +119,144 @@ def test_image_and_resolved_user_reply_survive_the_private_history_projection():
     assert "geometric proof" in rebuilt[2]["content"]
 
 
+def _image_bytes():
+    from PIL import Image
+
+    output = BytesIO()
+    Image.new("RGB", (20, 10), "white").save(output, format="PNG")
+    return output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_model_images_persist_as_references_and_replay_once_after_restart(
+    tmp_path, monkeypatch
+):
+    from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
+    from deeptutor.core.context import Attachment, UnifiedContext
+    from deeptutor.services.llm.multimodal import prepare_multimodal_messages
+    from deeptutor.services.session.sqlite_store import SQLiteSessionStore
+    from deeptutor.services.storage import LocalDiskAttachmentStore
+
+    attachment_store = LocalDiskAttachmentStore(root=tmp_path / "attachments")
+    monkeypatch.setattr("deeptutor.services.storage.get_attachment_store", lambda: attachment_store)
+    store = SQLiteSessionStore(db_path=tmp_path / "history.db")
+    session = await store.create_session()
+    sid = session["id"]
+    raw = _image_bytes()
+    url = await attachment_store.put(
+        session_id=sid, attachment_id="photo", filename="photo.png", data=raw
+    )
+    uploaded = Attachment(
+        type="image", url=url, base64=base64.b64encode(raw).decode(), filename="photo.png"
+    )
+    initial = prepare_multimodal_messages(
+        [{"role": "user", "content": "Read this"}], [uploaded]
+    ).messages
+    archived = await archive_model_images(initial, session_id=sid, attachments=[uploaded])
+    assert archived[0]["content"][1]["image_url"]["url"] == url
+    assert "base64," not in json.dumps(archived)
+    assert initial[0]["content"][1]["image_url"]["url"].startswith("data:")
+    user_id = await store.add_message(
+        sid, "user", "Read this", attachments=[{"type": "image", "url": url}]
+    )
+    await store.add_message(
+        sid,
+        "assistant",
+        "I see it",
+        metadata={
+            "model_turn": {
+                "version": 1,
+                "messages": [*archived, {"role": "assistant", "content": "I see it"}],
+            }
+        },
+    )
+    restored = SQLiteSessionStore(db_path=tmp_path / "history.db")
+    built = await ContextBuilder(restored).build(
+        session_id=sid,
+        llm_config=SimpleNamespace(model="gpt-test", context_window=128000, max_tokens=4096),
+    )
+    pipeline = AgenticChatPipeline(language="en")
+    prior = Attachment(type="image", url=url, filename="photo.png")
+    context = UnifiedContext(session_id=sid, user_message="Explain further", attachments=[prior])
+    replayed = pipeline._prepare_messages_with_attachments(
+        [*built.model_history, {"role": "user", "content": "Explain further"}], context
+    )
+    assert replayed[0] == initial[0]
+    assert replayed[-1]["content"] == "Explain further"
+    assert (
+        len(
+            [
+                p
+                for m in replayed
+                if isinstance(m.get("content"), list)
+                for p in m["content"]
+                if p.get("type") == "image_url"
+            ]
+        )
+        == 1
+    )
+    # Regenerating the image turn excludes its old answer/history, so the
+    # URL-only attachment must still be supplied exactly once.
+    regenerated = pipeline._prepare_messages_with_attachments(
+        [{"role": "user", "content": "Read this"}], context
+    )
+    assert regenerated == initial
+    # A pre-upgrade record still containing inline bytes must be recognized
+    # as the same image when the executor also restores its URL attachment.
+    legacy_replay = pipeline._prepare_messages_with_attachments(
+        [*initial, {"role": "user", "content": "Explain further"}], context
+    )
+    assert legacy_replay[0] == initial[0]
+    assert legacy_replay[-1]["content"] == "Explain further"
+    assert user_id
+
+
+@pytest.mark.asyncio
+async def test_sdk_images_without_uploaded_url_are_stored_in_scoped_attachment_store(
+    tmp_path, monkeypatch
+):
+    from deeptutor.services.llm.multimodal import hydrate_multimodal_messages
+    from deeptutor.services.storage import LocalDiskAttachmentStore
+
+    attachment_store = LocalDiskAttachmentStore(root=tmp_path / "partner")
+    monkeypatch.setattr("deeptutor.services.storage.get_attachment_store", lambda: attachment_store)
+    raw = _image_bytes()
+    encoded = base64.b64encode(raw).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": encoded},
+                }
+            ],
+        }
+    ]
+    archived = await archive_model_images(messages, session_id="partner-session", attachments=[])
+    url = archived[0]["content"][0]["image_url"]["url"]
+    assert url.startswith("/files/attachments/partner-session/model-")
+    assert encoded not in json.dumps(archived)
+    assert hydrate_multimodal_messages(archived, binding="anthropic") == messages
+
+
+def test_large_legacy_inline_images_do_not_consume_base64_text_token_budget(monkeypatch):
+    monkeypatch.setattr(
+        "deeptutor.services.session.context_builder.count_tokens", lambda value: len(value) // 4
+    )
+    short = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,tiny"}}],
+        }
+    ]
+    large = deepcopy(short)
+    large[0]["content"][0]["image_url"]["url"] = "data:image/png;base64," + "A" * 26_500_000
+    assert model_messages_token_count(large) == model_messages_token_count(short)
+    record = {"version": 1, "messages": [*large, {"role": "assistant", "content": "Answer"}]}
+    assert ContextBuilder(MagicMock())._model_tokens(rows(record)) < 2048
+
+
 @pytest.mark.asyncio
 async def test_compaction_preserves_whole_tool_turns_and_reuses_the_old_prefix():
     old = turn_record("evidence " * 1800)
@@ -173,6 +316,46 @@ async def test_summary_instruction_is_appended_after_original_messages_and_tools
     assert captured["tools"] == request["tools"]
     assert "tool_choice" not in captured
     assert request == original
+
+
+@pytest.mark.asyncio
+async def test_summary_hydrates_image_references_without_private_context_markers(
+    tmp_path, monkeypatch
+):
+    from deeptutor.services.storage import LocalDiskAttachmentStore
+
+    attachment_store = LocalDiskAttachmentStore(root=tmp_path / "attachments")
+    monkeypatch.setattr("deeptutor.services.storage.get_attachment_store", lambda: attachment_store)
+    raw = _image_bytes()
+    url = await attachment_store.put(
+        session_id="s", attachment_id="photo", filename="photo.png", data=raw
+    )
+    captured = {}
+
+    async def stream(_self, **kwargs):
+        captured.update(kwargs)
+        yield "Image summary"
+
+    monkeypatch.setattr(_ContextSummaryAgent, "stream_llm", stream)
+    messages = [
+        {
+            "role": "user",
+            "_context_snapshot": "example",
+            "content": [{"type": "image_url", "image_url": {"url": url}}],
+        }
+    ]
+    await ContextBuilder(MagicMock())._summarize(
+        session_id="s",
+        language="en",
+        source_text="Image conversation",
+        summary_budget=256,
+        replay_request={"messages": messages},
+    )
+    payload = json.dumps(captured["messages"])
+    assert base64.b64encode(raw).decode() in payload
+    assert "/files/attachments/" not in payload
+    assert "_context_snapshot" not in payload
+    assert messages[0]["content"][0]["image_url"]["url"] == url
 
 
 @pytest.mark.asyncio

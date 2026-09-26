@@ -24,7 +24,7 @@ def fingerprint_request(
     tools: Any,
     route: dict[str, Any],
 ) -> dict[str, Any]:
-    from deeptutor.services.session.context_builder import count_tokens
+    from deeptutor.services.session.model_history import model_messages_token_count
 
     # Hash an entire message, never individual tokens (which disclose vocabulary).
     return {
@@ -33,7 +33,7 @@ def fingerprint_request(
         "messages": [
             {
                 "hash": _digest(message),
-                "tokens": count_tokens(_encoded(message)),
+                "tokens": model_messages_token_count([message]),
                 "role": message.get("role"),
             }
             for message in messages

@@ -234,15 +234,13 @@ def test_standalone_frontend_matches_the_container_target_architecture() -> None
             re.MULTILINE,
         ), f"{stage} must install dependencies for the target architecture"
 
-    production = content.split("AS production\n", 1)[1].split(
-        "FROM production AS development", 1
-    )[0]
+    production = content.split("AS production\n", 1)[1].split("FROM production AS development", 1)[
+        0
+    ]
     standalone_copy = production.index(
         "COPY --from=frontend-builder /app/web/.next/standalone/ ./web/"
     )
-    native_check = production.index(
-        "RUN node -e \"require('/app/web/node_modules/sharp')\""
-    )
+    native_check = production.index("RUN node -e \"require('/app/web/node_modules/sharp')\"")
     assert native_check > standalone_copy
 
 
@@ -273,6 +271,23 @@ def test_supervisord_runs_as_root_with_unprivileged_children() -> None:
         assert "user=deeptutor" in section, (
             f"supervisord program '{name}' must run as deeptutor (user=deeptutor)"
         )
+
+
+def test_entrypoint_fail_fasts_on_unwritable_data_volume_without_root_app() -> None:
+    """Unraid bind mounts owned by a non-1000 host user must not start the app
+    as root, and chown failure must not be swallowed into a later misleading
+    'Knowledge base not initialized' error (#1458).
+    """
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "chown -R deeptutor:deeptutor /app/data 2>/dev/null || true" not in content
+    assert "check_container_data_volume" in content
+    assert 'PUID="${PUID:-${DEEPTUTOR_PUID:-1000}}"' in content
+    assert "skipping PUID remap" in content
+    assert "PUID/PGID must be non-root" in content
+    assert "gosu deeptutor /usr/bin/supervisord" not in content
+    assert "user=deeptutor" in content
 
 
 def test_frontend_api_is_url_agnostic_passthrough() -> None:

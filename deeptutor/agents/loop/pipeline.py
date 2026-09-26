@@ -86,7 +86,7 @@ from deeptutor.services.llm import (
     supports_tools,  # noqa: F401  (re-exported for tests)
 )
 from deeptutor.services.llm.context_window import resolve_effective_context_window
-from deeptutor.services.prompt import get_prompt_manager
+from deeptutor.services.prompt import get_prompt_manager, normalize_language
 from deeptutor.services.prompt.lookup import prompt_text as _prompt_text
 from deeptutor.tools.builtin import PARTNER_BUILTIN_TOOL_NAMES
 
@@ -236,7 +236,9 @@ class AgenticLoopPipeline:
         event_stage: str = "responding",
         emit_result: bool = True,
     ) -> None:
-        self.language = "zh" if language.lower().startswith("zh") else "en"
+        # Prompt resources fall back to English; the requested output language
+        # must still reach the assembler's final language directive.
+        self.language = normalize_language(language)
         self.llm_config = get_llm_config()
         self.binding = getattr(self.llm_config, "binding", None) or "openai"
         self.model = getattr(self.llm_config, "model", None)
@@ -453,7 +455,10 @@ class AgenticLoopPipeline:
         stable_blocks, self._runtime_snapshots = self._prompt_assembler.split_for_replay(
             self._last_prompt_blocks
         )
-        return self._prompt_assembler.render(stable_blocks)
+        return self._prompt_assembler.render(
+            stable_blocks,
+            allow_user_override=not bool(context.metadata.get("reply_language_fixed")),
+        )
 
     def _build_loop_messages(
         self,
@@ -558,9 +563,13 @@ class AgenticLoopPipeline:
         messages: list[dict[str, Any]],
         context: UnifiedContext,
     ) -> list[dict[str, Any]]:
+        from deeptutor.services.llm.multimodal import hydrate_multimodal_messages
+        from deeptutor.services.session.model_history import attachments_missing_from_history
+
+        messages = hydrate_multimodal_messages(messages, binding=self.binding, model=self.model)
         return prepare_multimodal_messages(
             messages,
-            context.attachments,
+            attachments_missing_from_history(messages, context.attachments),
             binding=self.binding,
             model=self.model,
         ).messages
@@ -1381,21 +1390,35 @@ class AgenticLoopPipeline:
             kwargs["conversation_history"] = list(context.conversation_history or [])
             kwargs["current_user_message"] = context.user_message or ""
         elif tool_name == "geogebra_analysis":
+            from deeptutor.services.llm.model_images import ModelImageError
+            from deeptutor.services.llm.multimodal import resolve_image_for_model
+
+            # The image is owned by the attachment pipeline, never a model-
+            # supplied argument. URL-only history/regeneration uses the same
+            # bounded cached image as the main chat call.
+            kwargs.pop("image_base64", None)
             first_image = next(
                 (
                     att
                     for att in (context.attachments or [])
-                    if getattr(att, "type", "") == "image" and getattr(att, "base64", "")
+                    if getattr(att, "type", "") == "image"
+                    and (getattr(att, "base64", "") or getattr(att, "url", ""))
                 ),
                 None,
             )
             if first_image is not None:
-                raw_b64 = first_image.base64
+                raw_b64 = first_image.base64 or ""
                 if raw_b64.startswith("data:"):
-                    kwargs["image_base64"] = raw_b64
-                else:
-                    mime = getattr(first_image, "mime_type", "") or "image/png"
-                    kwargs["image_base64"] = f"data:{mime};base64,{raw_b64}"
+                    raw_b64 = raw_b64.partition(",")[2]
+                try:
+                    resolved = resolve_image_for_model(url=first_image.url)
+                    if resolved is None and raw_b64:
+                        resolved = resolve_image_for_model(base64_data=raw_b64)
+                    if resolved:
+                        data, mime = resolved
+                        kwargs["image_base64"] = f"data:{mime};base64,{data}"
+                except ModelImageError:
+                    logger.warning("Skipping invalid GeoGebra image attachment")
             kwargs["language"] = context.language or "zh"
         for cap in self._active_loop_capabilities(context):
             kwargs = cap.augment_kwargs(tool_name, kwargs, context)

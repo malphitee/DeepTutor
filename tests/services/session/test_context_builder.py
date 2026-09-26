@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,6 +42,50 @@ class TestCountTokens:
         short = count_tokens("Hi")
         long = count_tokens("Hello, this is a longer sentence with many words in it.")
         assert long > short
+
+    @pytest.mark.asyncio
+    async def test_cold_encoding_load_does_not_block_event_loop(self, monkeypatch) -> None:
+        from deeptutor.services.session import context_builder
+
+        class _Encoding:
+            @staticmethod
+            def encode(text: str) -> list[str]:
+                return text.split()
+
+        load_started = threading.Event()
+        release_load = threading.Event()
+
+        def _slow_get_encoding(_name: str) -> _Encoding:
+            load_started.set()
+            release_load.wait(timeout=0.5)
+            return _Encoding()
+
+        monkeypatch.setattr(context_builder, "_TOKEN_ENCODING", None, raising=False)
+        monkeypatch.setattr(context_builder, "_TOKEN_ENCODING_LOADING", False, raising=False)
+        monkeypatch.setattr(context_builder, "_TOKEN_ENCODING_LOAD_FAILED", False, raising=False)
+        monkeypatch.setattr("tiktoken.get_encoding", _slow_get_encoding)
+
+        async def _release_after_event_loop_tick() -> None:
+            await asyncio.sleep(0.02)
+            release_load.set()
+
+        release_task = asyncio.create_task(_release_after_event_loop_tick())
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        estimated = count_tokens("one two three four")
+        elapsed = loop.time() - started_at
+
+        assert estimated > 0
+        assert elapsed < 0.1
+        await release_task
+        assert await asyncio.to_thread(load_started.wait, 1.0)
+
+        for _ in range(100):
+            if context_builder._TOKEN_ENCODING is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert context_builder._TOKEN_ENCODING is not None
+        assert count_tokens("one two") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +569,43 @@ class TestContextBuilderSummarize:
         assert summary == "short summary"
         assert captured["max_tokens"] == 50
         assert "under 40 tokens" in captured["user_prompt"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("language", "expected"),
+        [
+            ("ja", "Write the summary itself in 日本語."),
+            ("zh", "摘要正文本身请使用中文（简体）撰写。"),
+        ],
+    )
+    async def test_summary_instruction_names_the_session_language(
+        self, language: str, expected: str
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        async def _stream_llm(**kwargs: Any):
+            captured.update(kwargs)
+            yield "short summary"
+
+        agent = MagicMock()
+        agent.stream_llm = _stream_llm
+        builder = ContextBuilder(store=MagicMock())
+
+        with patch(
+            "deeptutor.services.session.context_builder._ContextSummaryAgent",
+            return_value=agent,
+        ):
+            await builder._summarize(
+                session_id="s1",
+                language=language,
+                source_text="User: hello",
+                summary_budget=50,
+            )
+
+        # The summary is replayed as a system row on every later turn, so an
+        # instruction that never says which language to write in drags the
+        # answer back to the prompt's own language (#1511).
+        assert expected in captured["system_prompt"]
 
 
 # ---------------------------------------------------------------------------

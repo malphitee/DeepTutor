@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 import json
 from typing import Any, AsyncGenerator
@@ -50,10 +50,50 @@ ToolArgsDeltaHook = Callable[[str, str, str], Awaitable[None]]
 
 def _dump_model(value: Any) -> Any:
     """Normalize an SDK object / dict into a plain dict."""
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
+        return dict(value)
+    if value is None or isinstance(value, (str, bytes, int, float, bool)):
         return value
     dump = getattr(value, "model_dump", None)
-    return dump() if callable(dump) else vars(value)
+    if callable(dump):
+        dumped = dump()
+        return dict(dumped) if isinstance(dumped, Mapping) else dumped
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        dumped = to_dict()
+        return dict(dumped) if isinstance(dumped, Mapping) else dumped
+    legacy_dict = getattr(value, "dict", None)
+    if callable(legacy_dict):
+        dumped = legacy_dict()
+        return dict(dumped) if isinstance(dumped, Mapping) else dumped
+    attrs = getattr(value, "__dict__", None)
+    return dict(attrs) if isinstance(attrs, Mapping) else value
+
+
+def _response_payload(response: Any) -> dict[str, Any]:
+    """Normalize standard and lightly unwrapped Responses payloads.
+
+    OpenAI's SDK returns a model with ``model_dump``. Some compatible gateways
+    unwrap a short response to plain text or return the output array directly;
+    accept those forms without calling ``vars`` on a scalar value.
+    """
+    if isinstance(response, str):
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": response}],
+                }
+            ]
+        }
+    if isinstance(response, list):
+        return {"output": response}
+    payload = _dump_model(response)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    raise TypeError(
+        f"Responses API returned an unsupported payload type: {type(response).__name__}"
+    )
 
 
 def _citation_from_annotation(annotation: Any) -> dict[str, str] | None:
@@ -455,9 +495,7 @@ async def consume_sse(
 
 def parse_response_output(response: Any) -> LLMResponse:
     """Parse an SDK Response object into LLMResponse."""
-    if not isinstance(response, dict):
-        dump = getattr(response, "model_dump", None)
-        response = dump() if callable(dump) else vars(response)
+    response = _response_payload(response)
 
     output = response.get("output") or []
     content_parts: list[str] = []

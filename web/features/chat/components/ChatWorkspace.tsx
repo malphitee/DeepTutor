@@ -50,7 +50,7 @@ import StarterSuggestions from "@/components/chat/home/StarterSuggestions";
 // render. The heavy renderers inside still load lazily.
 import FilePreviewDrawer from "@/components/chat/preview/FilePreviewDrawer";
 import { buildSessionActivity } from "@/components/chat/home/SessionActivityPanel";
-import Tooltip from "@/components/common/Tooltip";
+import Tooltip from "@/shared/ui/Tooltip";
 import SessionViewerPanel, {
   type SessionViewerPanelHandle,
 } from "@/components/chat/home/SessionViewerPanel";
@@ -70,6 +70,9 @@ import {
   type MessageRequestSnapshot,
 } from "@/features/chat/ChatStateAdapter";
 import { useAppShell } from "@/context/AppShellContext";
+import { readStoredResponseLanguage } from "@/context/app-shell-storage";
+import { RESPONSE_LANGUAGE_OPTIONS } from "@/features/settings/store";
+import { waitForReplyLanguageSave } from "@/features/chat/controllers/reply-language-save";
 
 import { WATCHING_ASK_EVENT } from "@/components/watching/WatchingPane";
 import type { FilePreviewSource } from "@/components/chat/preview/previewerFor";
@@ -78,11 +81,8 @@ import {
   extractBase64FromDataUrl,
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
-import {
-  preparePendingAttachments,
-  selectAttachmentFiles,
-  type PendingAttachment,
-} from "@/features/chat/controllers/pending-attachments";
+import { selectAttachmentFiles } from "@/features/chat/controllers/pending-attachments";
+import { usePendingAttachments } from "@/features/chat/controllers/usePendingAttachments";
 import { readChatLaunchIntent } from "@/lib/chat-launch-intent";
 import { useAttachmentLimits } from "@/lib/attachment-limits";
 import {
@@ -274,10 +274,12 @@ export default function ChatWorkspace({
     setLLMSelection,
     setPersonaSelection,
     setResourceSelection,
+    setReplyLanguageOverride,
     sendMessage,
     cancelStreamingTurn,
     submitUserReply,
     regenerateLastMessage,
+    resendLastMessage,
     deleteTurn,
     editMessage,
     switchBranch,
@@ -291,6 +293,23 @@ export default function ChatWorkspace({
   } = useChatStateAdapter();
 
   const entrySessionId = useRef(state.sessionId);
+  const [replyLanguageSavingKey, setReplyLanguageSavingKey] = useState<string | null>(null);
+  const replyLanguageSaveRef = useRef<{ key: string; pending: Promise<void> } | null>(null);
+  const handleReplyLanguageChange = useCallback((value: string) => {
+    const language = value || null;
+    const key = state.sessionKey;
+    const pending = setReplyLanguageOverride(language);
+    replyLanguageSaveRef.current = { key, pending };
+    setReplyLanguageSavingKey(key);
+    void pending
+      .catch((error: unknown) => notify(error instanceof Error ? error.message : t("Action failed")))
+      .finally(() => {
+        if (replyLanguageSaveRef.current?.pending === pending) {
+          replyLanguageSaveRef.current = null;
+          setReplyLanguageSavingKey(null);
+        }
+      });
+  }, [setReplyLanguageOverride, state.sessionKey, t]);
 
   const resourceReuse = useResourceReusePolicy(state.sessionKey || "draft", state.messages[0]?.id);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -363,8 +382,14 @@ export default function ChatWorkspace({
   const [userEnabledTools, setUserEnabledTools] = useState<string[] | null>(
     null,
   );
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const attachmentLimits = useAttachmentLimits();
+  const {
+    attachments,
+    setAttachments,
+    attachmentsPreparing,
+    prepareAndAppendAttachments,
+    waitForAttachments,
+  } = usePendingAttachments(attachmentLimits);
   const [dragging, setDragging] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<FilePreviewSource | null>(
@@ -1491,22 +1516,24 @@ export default function ChatWorkspace({
 
   const prepareAndAppendFiles = useCallback(
     async (files: File[]) => {
-      const { attachments: next, failures } =
-        await preparePendingAttachments(files);
+      const { failures } = await prepareAndAppendAttachments(files);
       if (failures.length) {
         const first = failures[0];
         showAttachmentError(
-          first.reason === "invalid_image"
-            ? t(
-                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
-                { name: first.name },
-              )
-            : t("Could not read file: {{name}}", { name: first.name }),
+          first.reason === "too_large"
+            ? t("File too large: {{name}}", { name: first.name })
+            : first.reason === "quota"
+              ? t("Too many files, skipped some")
+              : first.reason === "invalid_image"
+                ? t(
+                    "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                    { name: first.name },
+                  )
+                : t("Could not read file: {{name}}", { name: first.name }),
         );
       }
-      if (next.length) setAttachments((prev) => [...prev, ...next]);
     },
-    [showAttachmentError, t],
+    [prepareAndAppendAttachments, showAttachmentError, t],
   );
 
   const handlePaste = useCallback(
@@ -1526,7 +1553,7 @@ export default function ChatWorkspace({
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  }, [setAttachments]);
 
   const handlePreviewPendingAttachment = useCallback(
     (index: number) => {
@@ -1851,6 +1878,15 @@ export default function ChatWorkspace({
 
   const handleSend = useCallback(
     async (content: string) => {
+      if (!(await waitForReplyLanguageSave(
+        replyLanguageSaveRef.current?.key === state.sessionKey
+          ? replyLanguageSaveRef.current.pending
+          : null,
+        content,
+        (draft) => prefillInputRef.current?.(draft),
+      ))) return;
+      const attachments = await waitForAttachments();
+      if (!attachments) return;
       // A turn paused on a question: what the user typed is their answer, not
       // a new message. Routing it here means the card is one way to answer,
       // not the only one — and a card that never rendered no longer strands
@@ -2003,7 +2039,10 @@ export default function ChatWorkspace({
     },
     [
       resourceReuse, state.knowledgeBases, state.resourceSelection, agentNameSet, setKBs, setPersonaSelection, setResourceSelection,
-      attachments,
+      waitForAttachments,
+      state.sessionKey,
+      prefillInputRef,
+      setAttachments,
       bookReferencesPayload,
       courseId,
       readingReferencesPayload,
@@ -2566,6 +2605,8 @@ export default function ChatWorkspace({
                         language={state.language}
                         onCopyAssistantMessage={copyAssistantMessage}
                         onRegenerateMessage={handleRegenerateMessage}
+                        canResendLastTurn={state.lastTurnFailed}
+                        onResendLastTurn={() => resendLastMessage()}
                         onConfirmOutline={handleConfirmOutline}
                         onPreviewAttachment={handlePreviewMessageAttachment}
                         onOpenConsultation={(events) => {
@@ -2655,6 +2696,7 @@ export default function ChatWorkspace({
                 spaceMenuOpen={spaceMenuOpen}
                 hasMessages={hasMessages}
                 attachments={attachments}
+                attachmentsPreparing={attachmentsPreparing}
                 attachmentError={attachmentError}
                 activeCap={activeCap}
                 knowledgeBases={kbOptions}
@@ -2713,6 +2755,13 @@ export default function ChatWorkspace({
                 onClearPersona={handleClearPersona}
                 personaSelection={state.personaSelection}
                 onPersonaSelectionChange={setPersonaSelection}
+                replyLanguageOverride={state.replyLanguageOverride}
+                replyLanguageOptions={RESPONSE_LANGUAGE_OPTIONS}
+                replyLanguageDefaultLabel={RESPONSE_LANGUAGE_OPTIONS.find(
+                  (option) => option.value === readStoredResponseLanguage(),
+                )?.label ?? "English"}
+                replyLanguageDisabled={replyLanguageSavingKey === state.sessionKey || state.isStreaming}
+                onReplyLanguageChange={handleReplyLanguageChange}
                 personaSelectorOpen={personaSelectorOpen}
                 onPersonaSelectorOpenChange={setPersonaSelectorOpen}
                 resourceCatalog={resourceCatalog}

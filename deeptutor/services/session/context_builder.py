@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
+import threading
 from typing import Any, Awaitable, Callable
 
 from deeptutor.agents.base_agent import BaseAgent
@@ -14,12 +16,13 @@ from deeptutor.services.llm.context_window import (
     coerce_positive_int,
     resolve_effective_context_window,
 )
+from deeptutor.services.prompt.language import language_label
 
 from .ask_user_trace import (
     extract_ask_user_clarification_blocks,
     extract_ask_user_clarifications,
 )
-from .model_history import history_groups, model_turn, replay_history
+from .model_history import history_groups, model_messages_token_count, model_turn, replay_history
 from .protocol import SessionStoreProtocol
 from .provider_response_state import normalize_provider_response_state
 
@@ -38,17 +41,85 @@ MAX_SUMMARY_OUTPUT_TOKENS = 16_384
 MAX_RAW_REBUILD_TOKENS = 131_072
 
 
-def count_tokens(text: str) -> int:
-    """Estimate token count with tiktoken when available."""
-    if not text:
-        return 0
+_TOKEN_ENCODING: Any | None = None
+_TOKEN_ENCODING_LOADING = False
+_TOKEN_ENCODING_LOAD_FAILED = False
+_TOKEN_ENCODING_LOCK = threading.Lock()
+
+
+def _approximate_token_count(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _load_token_encoding() -> Any | None:
+    """Load tiktoken off the event loop and publish the cached encoder."""
+
+    global _TOKEN_ENCODING, _TOKEN_ENCODING_LOADING, _TOKEN_ENCODING_LOAD_FAILED
     try:
         import tiktoken
 
         encoding = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        with _TOKEN_ENCODING_LOCK:
+            _TOKEN_ENCODING_LOADING = False
+            _TOKEN_ENCODING_LOAD_FAILED = True
+        return None
+    with _TOKEN_ENCODING_LOCK:
+        _TOKEN_ENCODING = encoding
+        _TOKEN_ENCODING_LOADING = False
+        _TOKEN_ENCODING_LOAD_FAILED = False
+    return encoding
+
+
+def _schedule_token_encoding_load(loop: asyncio.AbstractEventLoop) -> None:
+    global _TOKEN_ENCODING_LOADING
+    with _TOKEN_ENCODING_LOCK:
+        if _TOKEN_ENCODING is not None or _TOKEN_ENCODING_LOADING or _TOKEN_ENCODING_LOAD_FAILED:
+            return
+        _TOKEN_ENCODING_LOADING = True
+    try:
+        loop.run_in_executor(None, _load_token_encoding)
+    except RuntimeError:
+        with _TOKEN_ENCODING_LOCK:
+            _TOKEN_ENCODING_LOADING = False
+
+
+def _load_token_encoding_synchronously() -> Any | None:
+    global _TOKEN_ENCODING_LOADING
+    with _TOKEN_ENCODING_LOCK:
+        if _TOKEN_ENCODING is not None:
+            return _TOKEN_ENCODING
+        if _TOKEN_ENCODING_LOADING or _TOKEN_ENCODING_LOAD_FAILED:
+            return None
+        _TOKEN_ENCODING_LOADING = True
+    return _load_token_encoding()
+
+
+def count_tokens(text: str) -> int:
+    """Estimate tokens without cold-loading tiktoken on an event loop.
+
+    ``tiktoken.get_encoding`` may synchronously download its vocabulary on the
+    first call in a fresh container. Async request paths use the existing
+    approximation for that first count while a worker thread warms the shared
+    encoder; synchronous callers may load it directly.
+    """
+    if not text:
+        return 0
+    encoding = _TOKEN_ENCODING
+    if encoding is None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            encoding = _load_token_encoding_synchronously()
+        else:
+            _schedule_token_encoding_load(loop)
+            return _approximate_token_count(text)
+    if encoding is None:
+        return _approximate_token_count(text)
+    try:
         return len(encoding.encode(text))
     except Exception:
-        return max(1, len(text) // 4)
+        return _approximate_token_count(text)
 
 
 def trim_incomplete_tail(text: str) -> str:
@@ -269,7 +340,7 @@ class ContextBuilder:
 
     def _model_tokens(self, messages: list[dict[str, Any]], summary: str = "") -> int:
         if any(model_turn(row) is not None for row in messages):
-            return count_tokens(json.dumps(replay_history(messages, summary), ensure_ascii=False))
+            return model_messages_token_count(replay_history(messages, summary))
         return count_tokens(build_history_text(self._build_history(summary, messages))) + sum(
             _provider_response_state_tokens(row) for row in messages
         )
@@ -379,6 +450,12 @@ class ContextBuilder:
         # The instruction targets ~80% of the hard cap so the model's own
         # length control — not the max_tokens cut — is the binding limit.
         target_tokens = max(1, int(summary_budget * 0.8))
+        # The summary is replayed as a system row on every later turn, so the
+        # language it is written in keeps steering the answer long after the
+        # turns it condensed have scrolled out. Unstated, a summary of a
+        # foreign-language session comes back in the default language and the
+        # reply follows it — #1511's drift "after a few rounds".
+        summary_language = language_label(language)
         system_prompt = (
             "You maintain a running summary of a conversation so future turns can "
             "continue seamlessly. Rewrite the summary from the material provided, "
@@ -393,7 +470,8 @@ class ContextBuilder:
             "Carry forward still-relevant entries from the existing summary unchanged "
             "unless new information contradicts them; drop only what is obsolete. "
             "Prefer concrete details (numbers, identifiers, exact terms) over "
-            "abstract restatement. Never invent information."
+            "abstract restatement. Never invent information. "
+            f"Write the summary itself in {summary_language}."
         )
         if language.startswith("zh"):
             system_prompt = (
@@ -406,6 +484,7 @@ class ContextBuilder:
                 "- 待办事项：未回答的问题、未完成的任务、已知阻塞\n"
                 "已有摘要中仍然有效的条目应原样保留，仅在新信息与之矛盾时修改，只删除确已过时"
                 "的内容。优先保留具体细节（数字、标识符、确切措辞），不要抽象转述，绝不虚构。"
+                f"摘要正文本身请使用{summary_language}撰写。"
             )
         user_prompt = (
             f"Update the summary using the material below. "
@@ -419,6 +498,8 @@ class ContextBuilder:
             _chunks: list[str] = []
             replay_kwargs: dict[str, Any] = {}
             if replay_request is not None:
+                from deeptutor.services.llm.multimodal import hydrate_multimodal_messages
+
                 # Reuse the conversation's warm prefix; only the instruction
                 # is new. Tools are present for cache identity, never executed.
                 instruction = (
@@ -426,10 +507,21 @@ class ContextBuilder:
                     f"{target_tokens} tokens. Output only the summary; do not call tools."
                 )
                 replay_kwargs = {
-                    "messages": [
-                        *replay_request["messages"],
-                        {"role": "user", "content": instruction},
-                    ],
+                    "messages": hydrate_multimodal_messages(
+                        [
+                            *(
+                                {
+                                    key: value
+                                    for key, value in message.items()
+                                    if key != "_context_snapshot"
+                                }
+                                for message in replay_request["messages"]
+                            ),
+                            {"role": "user", "content": instruction},
+                        ],
+                        binding=agent.binding,
+                        model=agent.model,
+                    ),
                     "tools": replay_request.get("tools"),
                 }
             async for _c in agent.stream_llm(

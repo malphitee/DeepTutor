@@ -47,7 +47,7 @@ import {
   isNavActive,
   primaryNavForPolicy,
 } from "@/components/sidebar/nav-entries";
-import { Tooltip } from "@/components/ui/Tooltip";
+import { Tooltip } from "@/shared/ui/Tooltip";
 import { useDragSort, type DragSort } from "@/hooks/useDragSort";
 import { placeMenu, type FloatingMenuPosition } from "@/lib/floating-menu";
 import {
@@ -272,6 +272,7 @@ export function SidebarNav({
                     <Link
                       key={href}
                       href={href}
+                      prefetch={false}
                       onClick={(event) => {
                         closeMenus();
                         if (href === "/chat") onHomeClick(event);
@@ -366,6 +367,7 @@ export function SidebarNav({
           <Link
             key={`${href}-destination`}
             href={href}
+            prefetch={false}
             draggable={false}
             onClick={href === "/chat" ? onHomeClick : onNavigate}
             className={`${rowClass} ${
@@ -580,6 +582,7 @@ export function SidebarHome({
       ) : (
         <Link
           href="/chat"
+          prefetch={false}
           onClick={onHomeClick}
           className={`${className} ${
             active
@@ -641,6 +644,7 @@ function RailRow({
     <Tooltip label={label} description={description} side="right">
       <Link
         href={href}
+        prefetch={false}
         onClick={href === "/chat" ? onHomeClick : undefined}
         aria-label={label}
         className={`relative flex h-9 w-9 items-center justify-center rounded-xl transition-all duration-150 ${

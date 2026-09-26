@@ -17,6 +17,10 @@ on:
       - "pyproject.toml"
       - "web/**"
       - ".github/workflows/tests.yml"
+      - ".github/workflows/user-isolation.yml"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "docker-compose.yml"
   pull_request:
     branches:
       - main
@@ -30,6 +34,10 @@ on:
       - "pyproject.toml"
       - "web/**"
       - ".github/workflows/tests.yml"
+      - ".github/workflows/user-isolation.yml"
+      - "Dockerfile"
+      - "compose.yaml"
+      - "docker-compose.yml"
 
 jobs:
   lint:

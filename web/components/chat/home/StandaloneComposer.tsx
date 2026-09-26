@@ -27,7 +27,9 @@ import { useTranslation } from "react-i18next";
 
 import ChatComposer from "@/components/chat/home/ChatComposer";
 import type { ContextBudget } from "@/components/chat/home/ContextBudgetChip";
+import type { ResourceSelection } from "@/features/chat/ChatStateAdapter";
 import type { CapabilityDef } from "@/features/capabilities/presentation";
+import type { ComposerResourceCatalog } from "@/hooks/useComposerResources";
 import type { SelectedHistorySession } from "@/components/chat/HistorySessionPicker";
 import type { SelectedQuestionEntry } from "@/components/chat/QuestionBankPicker";
 import { useAttachmentLimits } from "@/lib/attachment-limits";
@@ -40,11 +42,8 @@ import {
   extractBase64FromDataUrl,
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
-import {
-  preparePendingAttachments,
-  selectAttachmentFiles,
-  type PendingAttachment,
-} from "@/features/chat/controllers/pending-attachments";
+import { selectAttachmentFiles } from "@/features/chat/controllers/pending-attachments";
+import { usePendingAttachments } from "@/features/chat/controllers/usePendingAttachments";
 import {
   listKnowledgeBases,
   type KnowledgeBaseSummary,
@@ -160,6 +159,8 @@ interface StandaloneComposerProps {
   inputPlaceholder?: string;
   /** A line Tab accepts while the composer is empty. See ComposerInput. */
   inputPlaceholderCompletion?: string;
+  /** Context shown inside the composer above the text field. */
+  inputHeader?: React.ReactNode;
   /**
    * Capability chip contents. Defaults to a locked "Chat" entry — pass a
    * one-entry list to relabel it, or several to make the chip a picker.
@@ -187,6 +188,9 @@ interface StandaloneComposerProps {
    */
   personaSelection?: string;
   onPersonaSelectionChange?: (persona: string) => void;
+  resourceCatalog?: ComposerResourceCatalog;
+  resourceSelection?: ResourceSelection;
+  onResourceSelectionChange?: (selection: ResourceSelection) => void;
   /** Hide the My Agents reference entry. */
   agentsAvailable?: boolean;
   /** Receives a function that drops text into the textarea (ask_user chips). */
@@ -207,6 +211,7 @@ function StandaloneComposerImpl({
   awaitingUserReply = false,
   inputPlaceholder,
   inputPlaceholderCompletion,
+  inputHeader,
   capabilities,
   activeCapValue,
   onSelectCapability,
@@ -217,6 +222,9 @@ function StandaloneComposerImpl({
   onLLMSelectionChange,
   personaSelection,
   onPersonaSelectionChange,
+  resourceCatalog,
+  resourceSelection,
+  onResourceSelectionChange,
   agentsAvailable = false,
   prefillInputRef,
   contextBudget = null,
@@ -232,8 +240,14 @@ function StandaloneComposerImpl({
   const dragCounter = useRef(0);
 
   // ── Composer local state ──────────────────────────────────────
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const attachmentLimits = useAttachmentLimits();
+  const {
+    attachments,
+    setAttachments,
+    attachmentsPreparing,
+    prepareAndAppendAttachments,
+    waitForAttachments,
+  } = usePendingAttachments(attachmentLimits);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const attachmentErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -460,22 +474,24 @@ function StandaloneComposerImpl({
 
   const prepareAndAppendFiles = useCallback(
     async (files: File[]) => {
-      const { attachments: next, failures } =
-        await preparePendingAttachments(files);
+      const { failures } = await prepareAndAppendAttachments(files);
       if (failures.length) {
         const first = failures[0];
         showAttachmentError(
-          first.reason === "invalid_image"
-            ? t(
-                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
-                { name: first.name },
-              )
-            : t("Could not read file: {{name}}", { name: first.name }),
+          first.reason === "too_large"
+            ? t("File too large: {{name}}", { name: first.name })
+            : first.reason === "quota"
+              ? t("Too many files, skipped some")
+              : first.reason === "invalid_image"
+                ? t(
+                    "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                    { name: first.name },
+                  )
+                : t("Could not read file: {{name}}", { name: first.name }),
         );
       }
-      if (next.length) setAttachments((prev) => [...prev, ...next]);
     },
-    [showAttachmentError, t],
+    [prepareAndAppendAttachments, showAttachmentError, t],
   );
 
   const handleAddFiles = useCallback(
@@ -489,7 +505,7 @@ function StandaloneComposerImpl({
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  }, [setAttachments]);
 
   const handlePaste = useCallback(
     async (event: React.ClipboardEvent) => {
@@ -707,6 +723,8 @@ function StandaloneComposerImpl({
   const handleSend = useCallback(
     async (content: string) => {
       if (isStreaming && !awaitingUserReply) return;
+      const attachments = await waitForAttachments();
+      if (!attachments) return;
       const hasReferences =
         attachments.length > 0 ||
         selectedBookReferences.length > 0 ||
@@ -776,10 +794,18 @@ function StandaloneComposerImpl({
       if (!resourceReuse.policy.persona) setSelectedPersona(null);
       applyKnowledgeBases(retainedKnowledgeBases(selectedKnowledgeBases, agentNameSet, resourceReuse.policy));
       if (!resourceReuse.policy.memory) setSelectedMemoryFiles([]);
+      if (onResourceSelectionChange) {
+        const current = resourceSelection ?? { skills: [], mcp: [] };
+        onResourceSelectionChange({
+          skills: resourceReuse.policy.skills ? current.skills : [],
+          mcp: resourceReuse.policy.mcp ? current.mcp : [],
+        });
+      }
     },
     [
       resourceReuse, applyKnowledgeBases, agentNameSet,
-      attachments,
+      waitForAttachments,
+      setAttachments,
       awaitingUserReply,
       isStreaming,
       isQuizMode,
@@ -804,6 +830,8 @@ function StandaloneComposerImpl({
       selectedPartnerGroup,
       selectedPartner,
       visualizeConfig,
+      onResourceSelectionChange,
+      resourceSelection,
     ],
   );
 
@@ -882,6 +910,7 @@ function StandaloneComposerImpl({
         hasMessages={hasMessages}
         contextBudget={contextBudget ?? null}
         attachments={attachments}
+        attachmentsPreparing={attachmentsPreparing}
         attachmentError={attachmentError}
         activeCap={activeCap}
         knowledgeBases={kbOptions}
@@ -896,6 +925,9 @@ function StandaloneComposerImpl({
         onSubagentBudgetChange={setSubagentBudget}
         personaSelection={personaSelection}
         onPersonaSelectionChange={onPersonaSelectionChange}
+        resourceCatalog={resourceCatalog}
+        resourceSelection={resourceSelection}
+        onResourceSelectionChange={onResourceSelectionChange}
         personaSelectorOpen={personaSelectorOpen}
         onPersonaSelectorOpenChange={setPersonaSelectorOpen}
         llmOptions={llmOptions}
@@ -952,6 +984,7 @@ function StandaloneComposerImpl({
         prefillInputRef={prefillInputRef}
         inputPlaceholder={inputPlaceholder}
         inputPlaceholderCompletion={inputPlaceholderCompletion}
+        inputHeader={inputHeader}
       />
 
       <NotebookRecordPicker

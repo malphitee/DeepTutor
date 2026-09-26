@@ -29,7 +29,7 @@ from .book_permission import (
     public_permission_dict,
 )
 from .learner_profile import normalize_profile
-from .models import AccountPreset, Role
+from .models import AccountPreset, Role, normalize_role
 from .paths import PROJECT_ROOT, SYSTEM_ROOT, migrate_legacy_multi_user_tree
 
 logger = logging.getLogger(__name__)
@@ -95,9 +95,8 @@ def _canonical_record(
     hashed = value.get("hash") or value.get("password_hash") or ""
     if not isinstance(hashed, str) or not hashed:
         return None
-    # Only absent fields receive legacy defaults. Treating an explicitly bad
-    # role as missing could promote a damaged first record to administrator
-    # during a read and silently persist the privilege change.
+    # Only absent fields receive legacy defaults. Invalid explicit roles/presets
+    # fail closed instead of silently changing account privileges.
     role = value.get("role", default_role)
     if not isinstance(role, str) or role not in {"admin", "user"}:
         raise IdentityStoreError("Invalid user role")
@@ -177,8 +176,8 @@ def _migrate_legacy_users() -> dict[str, dict[str, Any]] | None:
     users: dict[str, dict[str, Any]] = {}
     for username, value in legacy.items():
         role: Role = "admin" if not users else "user"
-        if isinstance(value, dict) and str(value.get("role") or "") in {"admin", "user"}:
-            role = str(value.get("role"))  # type: ignore[assignment]
+        if isinstance(value, dict):
+            role = normalize_role(str(value.get("role") or ""), role)  # type: ignore[assignment]
         record = _canonical_record(username, value, default_role=role)
         if record is None:
             raise IdentityStoreError("Invalid legacy user record")
@@ -265,8 +264,8 @@ def _load_users_locked(env_username: str, env_password_hash: str) -> dict[str, d
     changed = False
     for index, (username, value) in enumerate(users.items()):
         role: Role = "admin" if index == 0 else "user"
-        if isinstance(value, dict) and str(value.get("role") or "") in {"admin", "user"}:
-            role = str(value.get("role"))  # type: ignore[assignment]
+        if isinstance(value, dict):
+            role = normalize_role(str(value.get("role") or ""), role)  # type: ignore[assignment]
         record = _canonical_record(str(username), value, default_role=role)
         if record is None:
             raise IdentityStoreError("Invalid user record")
@@ -617,8 +616,7 @@ def set_role(username: str, role: Role) -> bool:
 
 
 def set_disabled(username: str, disabled: bool) -> bool:
-    """Enable or disable an account and revoke its previously issued tokens."""
-
+    """Enable or disable an account and revoke previously issued tokens."""
     with auth_store_transaction():
         users = load_users()
         record = users.get(username)
@@ -636,13 +634,20 @@ def set_disabled(username: str, disabled: bool) -> bool:
     return True
 
 
-def set_preset(username: str, preset: AccountPreset) -> bool:
+def set_preset(
+    username: str, preset: AccountPreset, *, expected_user_id: str | None = None
+) -> bool:
     """Update an account's configuration preset without changing its role."""
     if preset not in {"standard", "learner", "custom"}:
         raise ValueError("preset must be 'standard', 'learner', or 'custom'")
     with auth_store_transaction():
         users = load_users()
         if username not in users:
+            return False
+        if (
+            expected_user_id is not None
+            and str(users[username].get("id") or "") != expected_user_id
+        ):
             return False
         users[username]["preset"] = preset
         _write_users(users)

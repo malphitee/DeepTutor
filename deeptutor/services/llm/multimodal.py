@@ -20,6 +20,12 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .capabilities import supports_vision, supports_vision_url
+from .model_images import (
+    MAX_INPUT_BYTES,
+    ModelImageError,
+    normalize_image_for_model,
+    normalize_local_image,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +63,6 @@ def _guess_mime_type(filename: str, fallback: str = MIME_FALLBACK) -> str:
         "webp": "image/webp",
         "svg": "image/svg+xml",
     }.get(ext, fallback)
-
-
-def _detect_supported_image_mime(data: bytes) -> str | None:
-    """Sniff the provider-supported raster formats from their file signature."""
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None
 
 
 def _build_openai_image_part(
@@ -110,6 +103,8 @@ def _resolve_local_attachment_url(url: str) -> tuple[str, str] | None:
     if not url:
         return None
     parsed = urlparse(url)
+    if parsed.scheme or parsed.netloc:
+        return None
     path = parsed.path or url
     if not path.startswith(_LOCAL_ATTACHMENT_PREFIX):
         return None
@@ -129,11 +124,98 @@ def _resolve_local_attachment_url(url: str) -> tuple[str, str] | None:
         target = resolve(session_id=sid, attachment_id=aid, filename=name)
         if target is None:
             return None
-        data = target.read_bytes()
+        normalized = normalize_local_image(target)
+    except ModelImageError:
+        raise
     except Exception as exc:
         logger.warning("failed to resolve local attachment %s: %s", url, exc)
         return None
-    return _b64.b64encode(data).decode("ascii"), _guess_mime_type(name)
+    return _b64.b64encode(normalized.data).decode("ascii"), normalized.mime_type
+
+
+def resolve_image_for_model(*, base64_data: str = "", url: str = "") -> tuple[str, str] | None:
+    """Return bounded (base64, MIME) bytes; never fetch an external URL.
+
+    Invalid inline/local bytes raise ModelImageError. Unresolvable URLs return
+    None so each consumer can surface its own missing-image message. Callers
+    holding a stored attachment should pass its URL to reuse the disk variant.
+    """
+    if not base64_data:
+        return _resolve_local_attachment_url(url)
+    if len(base64_data) > 4 * ((MAX_INPUT_BYTES + 2) // 3):
+        raise ModelImageError("Image exceeds the 32 MiB input limit.")
+    try:
+        raw = _b64.b64decode(base64_data, validate=True)
+    except (ValueError, _binascii.Error) as exc:
+        raise ModelImageError("Image contains invalid base64 data.") from exc
+    normalized = normalize_image_for_model(raw)
+    return _b64.b64encode(normalized.data).decode("ascii"), normalized.mime_type
+
+
+def hydrate_multimodal_messages(
+    messages: list[dict[str, Any]],
+    binding: str = "openai",
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Copy private model history into provider-ready, bounded image messages.
+
+    History may retain local references instead of base64; legacy inline
+    images are normalized here too. The persisted message list is not mutated.
+    """
+    anthropic = (binding or "").lower() in ("anthropic", "claude")
+    require_base64 = anthropic or not supports_vision_url(binding, model)
+    hydrated = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            hydrated.append(dict(message))
+            continue
+        parts = []
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") not in ("image_url", "image"):
+                parts.append(part)
+                continue
+            b64, url = "", ""
+            detail = None
+            if part.get("type") == "image_url":
+                image_url = part.get("image_url") or {}
+                url = str(image_url.get("url") or "") if isinstance(image_url, dict) else ""
+                detail = image_url.get("detail") if isinstance(image_url, dict) else None
+                if url.startswith("data:"):
+                    header, separator, b64 = url.partition(",")
+                    if not separator or not header.endswith(";base64"):
+                        b64 = "invalid"
+                    url = ""
+            else:
+                source = part.get("source") or {}
+                if isinstance(source, dict):
+                    b64 = str(source.get("data") or "")
+                    url = str(source.get("url") or "")
+            try:
+                resolved = resolve_image_for_model(base64_data=b64, url=url)
+                if resolved:
+                    payload, mime = resolved
+                    parts.append(
+                        _build_anthropic_image_part(base64_data=payload, mime_type=mime)
+                        if anthropic
+                        else _build_openai_image_part(base64_data=payload, mime_type=mime)
+                    )
+                elif url and not require_base64 and not url.startswith(_LOCAL_ATTACHMENT_PREFIX):
+                    parts.append(_build_openai_image_part(base64_data="", mime_type="", url=url))
+                else:
+                    parts.append(
+                        {
+                            "type": "text",
+                            "text": "[Image attachment skipped: unavailable local image.]",
+                        }
+                    )
+            except ModelImageError as exc:
+                logger.warning("Skipping unsafe historical model image: %s", exc)
+                parts.append({"type": "text", "text": f"[Image attachment skipped: {exc}]"})
+            if detail in ("low", "high", "auto") and parts[-1].get("type") == "image_url":
+                parts[-1]["image_url"]["detail"] = detail
+        hydrated.append({**message, "content": parts})
+    return hydrated
 
 
 def prepare_multimodal_messages(
@@ -247,11 +329,22 @@ def _inject_images(
         # path they can't fetch. Resolve them to base64 unconditionally so
         # the inline-base64 branch below takes over.
         is_local_attachment_url = url.startswith(_LOCAL_ATTACHMENT_PREFIX) if url else False
-        if not b64 and url and (require_base64 or is_local_attachment_url):
-            resolved = _resolve_local_attachment_url(url)
+        normalized_locally = False
+        if url and (is_local_attachment_url or (not b64 and require_base64)):
+            try:
+                resolved = _resolve_local_attachment_url(url)
+            except ModelImageError as exc:
+                invalid_dropped += 1
+                content_parts.append({"type": "text", "text": f"[Image attachment skipped: {exc}]"})
+                continue
             if resolved is not None:
                 b64, resolved_mime = resolved
-                mime = mime or resolved_mime
+                mime = resolved_mime
+                normalized_locally = True
+            elif b64:
+                # A newly-persisted attachment normally resolves here, but a
+                # storage failure must still allow its inline upload.
+                pass
             elif require_base64:
                 logger.warning(
                     "Dropping url-only image %r: provider requires base64 but"
@@ -269,13 +362,10 @@ def _inject_images(
                 url_dropped += 1
                 continue
 
-        if b64:
+        if b64 and not normalized_locally:
             try:
-                raw = _b64.b64decode(b64, validate=True)
-            except (ValueError, _binascii.Error):
-                raw = b""
-            detected_mime = _detect_supported_image_mime(raw)
-            if detected_mime is None:
+                b64, mime = resolve_image_for_model(base64_data=b64)
+            except ModelImageError as exc:
                 filename = str(getattr(att, "filename", "") or "image")
                 logger.warning(
                     "Dropping invalid or unsupported inline image %r before provider call",
@@ -284,18 +374,11 @@ def _inject_images(
                 content_parts.append(
                     {
                         "type": "text",
-                        "text": (
-                            f"[Image attachment skipped: {filename} is not a valid "
-                            "JPG, PNG, GIF, or WebP image.]"
-                        ),
+                        "text": (f"[Image attachment skipped: {filename}. {exc}]"),
                     }
                 )
                 invalid_dropped += 1
                 continue
-            # Browser-provided MIME metadata is not trustworthy. Matching it
-            # to the bytes prevents valid images with a wrong label from being
-            # rejected by the provider.
-            mime = detected_mime
 
         if anthropic:
             if not b64:
@@ -410,7 +493,9 @@ def should_degrade_to_text(
 __all__ = [
     "MultimodalResult",
     "has_image_parts",
+    "hydrate_multimodal_messages",
     "prepare_multimodal_messages",
+    "resolve_image_for_model",
     "should_degrade_to_text",
     "strip_image_parts",
     "strip_image_parts_inplace",

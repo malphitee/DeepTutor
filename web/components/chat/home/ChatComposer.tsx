@@ -7,6 +7,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { saveWorkspaceDraft, readWorkspaceDraft } from "@/lib/workspace-drafts";
@@ -87,6 +88,8 @@ import { knowledgeBaseRef } from "@/lib/knowledge-helpers";
 import { ComposerInput, type ComposerInputHandle } from "./ComposerInput";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import type { CapabilityDef } from "@/features/capabilities/presentation";
+import AttachmentProcessingStatus from "./AttachmentProcessingStatus";
+import type { AttachmentProcessingItem } from "@/features/chat/selectors/attachment-processing";
 
 interface PendingAttachment {
   type: string;
@@ -202,6 +205,7 @@ export default memo(function ChatComposer({
   hasMessages,
   attachments,
   attachmentError,
+  attachmentProcessing = [],
   activeCap,
   knowledgeBases,
   connectedAgents = [],
@@ -231,6 +235,7 @@ export default memo(function ChatComposer({
   selectedMemoryFiles,
   selectedKnowledgeBases,
   isStreaming,
+  attachmentsPreparing = false,
   awaitingUserReply = false,
   isVisualizeMode,
   capabilityNeedsConfig,
@@ -254,6 +259,11 @@ export default memo(function ChatComposer({
   onPersonaSelectionChange,
   personaSelectorOpen,
   onPersonaSelectorOpenChange,
+  replyLanguageOverride,
+  replyLanguageOptions,
+  replyLanguageDefaultLabel,
+  replyLanguageDisabled,
+  onReplyLanguageChange,
   resourceCatalog,
   resourceSelection,
   onResourceSelectionChange,
@@ -279,6 +289,7 @@ export default memo(function ChatComposer({
   prefillInputRef,
   inputPlaceholder,
   inputPlaceholderCompletion,
+  inputHeader,
   showCapabilityChip = true,
 }: {
   composerRef: RefObject<HTMLDivElement | null>;
@@ -306,6 +317,7 @@ export default memo(function ChatComposer({
   hasMessages: boolean;
   attachments: PendingAttachment[];
   attachmentError: string | null;
+  attachmentProcessing?: AttachmentProcessingItem[];
   activeCap: CapabilityDef;
   knowledgeBases: KnowledgeBase[];
   /** Connected local subagents (Claude Code / Codex) selectable for this turn. */
@@ -347,6 +359,7 @@ export default memo(function ChatComposer({
   selectedMemoryFiles: SpaceMemoryFile[];
   selectedKnowledgeBases: string[];
   isStreaming: boolean;
+  attachmentsPreparing?: boolean;
   /** The live turn is paused on an ask_user card and needs an answer. */
   awaitingUserReply?: boolean;
   isVisualizeMode: boolean;
@@ -380,13 +393,19 @@ export default memo(function ChatComposer({
   /**
    * Session-persona wiring (main chat only). When `onPersonaSelectionChange`
    * is provided, the toolbar shows a PersonaSelector chip and the composer
-   * accepts the `/persona` slash command. The quiz follow-up surface omits
-   * these and keeps its per-turn persona picker flow.
+   * accepts `/persona`. The quiz follow-up surface omits these and keeps its
+   * per-turn persona picker flow.
    */
   personaSelection?: string;
   onPersonaSelectionChange?: (persona: string) => void;
   personaSelectorOpen?: boolean;
   onPersonaSelectorOpenChange?: (open: boolean) => void;
+  /** Main chat's session-level reply language, selected via /language. */
+  replyLanguageOverride?: string | null;
+  replyLanguageOptions?: readonly { value: string; label: string }[];
+  replyLanguageDefaultLabel?: string;
+  replyLanguageDisabled?: boolean;
+  onReplyLanguageChange?: (value: string) => void;
   /**
    * Skill / MCP narrowing for this conversation. Supplied together: the
    * catalog is what may be picked (already clipped to what the workspace
@@ -428,6 +447,12 @@ export default memo(function ChatComposer({
   inputPlaceholder?: string;
   /** A line Tab accepts while the composer is empty. See ComposerInput. */
   inputPlaceholderCompletion?: string;
+  /**
+   * Surface-owned context shown inside the box, above the text — the reading
+   * companion's quoted passage. Inside rather than above, so it reads as part
+   * of the message being written instead of a card floating over it.
+   */
+  inputHeader?: ReactNode;
   /**
    * Hide the capability chip. A surface that only ever runs one capability
    * — and names it in its own chrome — gains nothing from a picker that
@@ -630,6 +655,7 @@ export default memo(function ChatComposer({
 
   const doSend = useCallback(
     (content: string) => {
+      if (attachmentsPreparing) return;
       onSend(content);
       void saveWorkspaceDraft({ text: "", attachments: [] }).catch(() => {});
       setHasContent(false);
@@ -639,7 +665,7 @@ export default memo(function ChatComposer({
       // so the user can keep typing, including after switching back to the tab.
       focusTextarea();
     },
-    [focusTextarea, onSend],
+    [attachmentsPreparing, focusTextarea, onSend],
   );
 
   const hasReferences =
@@ -664,7 +690,8 @@ export default memo(function ChatComposer({
   // there made the interactive card the ONLY way to answer — and left the
   // learner with no way out at all if the card failed to render.
   const streamingBlocksSend = isStreaming && !awaitingUserReply;
-  const canSend = hasIntent && !streamingBlocksSend && !isConfigBlocked;
+  const canSend =
+    hasIntent && !streamingBlocksSend && !isConfigBlocked && !attachmentsPreparing;
 
   // `blocked` only exists once there is intent: without it the button stays
   // `idle` so an empty composer doesn't present a live send affordance. That
@@ -672,7 +699,7 @@ export default memo(function ChatComposer({
   // the `blocked` state can stay clickable and surface the config card.
   const sendState: SendState = streamingBlocksSend
     ? "streaming"
-    : !hasIntent
+    : !hasIntent || attachmentsPreparing
       ? "idle"
       : isConfigBlocked
         ? "blocked"
@@ -796,9 +823,11 @@ export default memo(function ChatComposer({
   const sendLabel =
     sendState === "streaming"
       ? t("Stop generating")
-      : awaitingUserReply
-        ? t("Send answer")
-        : t("Send");
+      : attachmentsPreparing
+        ? t("Loading")
+        : awaitingUserReply
+          ? t("Send answer")
+          : t("Send");
   const sendTitle =
     sendState === "blocked"
       ? t("Confirm settings on the right to send.")
@@ -1006,12 +1035,15 @@ export default memo(function ChatComposer({
             tabIndex={-1}
           />
 
+          {inputHeader}
           <SelectedResources items={contextTreeItems}/>
+          <AttachmentProcessingStatus items={attachmentProcessing} />
           <ComposerInput
             ref={inputHandleRef}
             textareaRef={textareaRef}
             isVisualizeMode={isVisualizeMode}
             isStreaming={isStreaming}
+            attachmentsPreparing={attachmentsPreparing}
             canSendEmpty={hasReferences}
             onSend={doSend}
             onInputChange={handleInputChange}
@@ -1037,6 +1069,12 @@ export default memo(function ChatComposer({
                 ? () => onPersonaSelectorOpenChange(true)
                 : undefined
             }
+            replyLanguageOverride={replyLanguageOverride}
+            replyLanguageOptions={replyLanguageOptions}
+            replyLanguageDefaultLabel={replyLanguageDefaultLabel}
+            replyLanguageDisabled={replyLanguageDisabled}
+            onReplyLanguageChange={onReplyLanguageChange}
+            languagePickerBelow={!hasMessages}
             placeholder={inputPlaceholder}
             placeholderCompletion={inputPlaceholderCompletion}
             minHeight={hasMessages ? 28 : 64}
@@ -1315,7 +1353,11 @@ export default memo(function ChatComposer({
                   className={`group relative ml-1 inline-grid h-8 w-8 shrink-0 place-items-center rounded-full transition-[background-color,box-shadow,transform] duration-200 active:scale-95 ${SEND_STATE_CLASS[sendState]}`}
                   aria-label={sendLabel}
                   title={sendTitle}
+                  aria-busy={attachmentsPreparing}
                 >
+                  {attachmentsPreparing && sendState !== "streaming" && (
+                    <Loader2 size={16} className="col-start-1 row-start-1 animate-spin" />
+                  )}
                   {sendState === "streaming" && (
                     // Outside the fill, so "still working" reads at a glance
                     // and dims on hover to hand the control back as "stop".
@@ -1325,7 +1367,7 @@ export default memo(function ChatComposer({
                     size={16}
                     strokeWidth={2.5}
                     className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${
-                      sendState === "streaming"
+                      sendState === "streaming" || attachmentsPreparing
                         ? "scale-50 opacity-0"
                         : "scale-100 opacity-100"
                     }`}

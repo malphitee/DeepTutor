@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 from typing import Any
 
+from PIL import Image
 import pytest
 
 from deeptutor.services.llm.config import LLMConfig
 from deeptutor.services.llm.exceptions import LLMAPIError
 from deeptutor.services.llm.factory import complete, complete_with_config, stream
 from deeptutor.services.llm.provider_core.base import LLMResponse
+
+_png_buffer = BytesIO()
+Image.new("RGB", (8, 8), "white").save(_png_buffer, format="PNG")
+_PNG_B64 = base64.b64encode(_png_buffer.getvalue()).decode("ascii")
 
 
 class _FakeProvider:
@@ -254,7 +261,7 @@ async def test_complete_injects_openai_image_parts(monkeypatch) -> None:
     result = await complete(
         "ignored",
         messages=[{"role": "user", "content": "hi"}],
-        image_data="abc123",
+        image_data=_PNG_B64,
     )
 
     assert result == "ok"
@@ -262,7 +269,7 @@ async def test_complete_injects_openai_image_parts(monkeypatch) -> None:
     assert isinstance(content, list)
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
-    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,abc123")
+    assert content[1]["image_url"]["url"] == f"data:image/png;base64,{_PNG_B64}"
 
 
 @pytest.mark.asyncio
@@ -283,7 +290,7 @@ async def test_complete_injects_anthropic_image_parts(monkeypatch) -> None:
     result = await complete(
         "ignored",
         messages=[{"role": "user", "content": "hi"}],
-        image_data="abc123",
+        image_data=_PNG_B64,
     )
 
     assert result == "ok"
@@ -311,7 +318,7 @@ async def test_complete_injects_custom_anthropic_image_parts(monkeypatch) -> Non
     result = await complete(
         "ignored",
         messages=[{"role": "user", "content": "hi"}],
-        image_data="abc123",
+        image_data=_PNG_B64,
     )
 
     assert result == "ok"
