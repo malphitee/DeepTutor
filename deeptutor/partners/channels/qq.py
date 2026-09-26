@@ -132,7 +132,9 @@ def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
     class _Bot(botpy.Client):
         def __init__(self):
             # Disable botpy's file log — tutorbot uses loguru; default "botpy.log" fails on read-only fs
-            super().__init__(intents=intents, ext_handlers=False)
+            # The SDK's default 5-second HTTP timeout can expire while QQ is
+            # accepting a reply; give the send request more time to complete.
+            super().__init__(intents=intents, timeout=15, ext_handlers=False)
 
         async def _bot_login(self, token):
             await super()._bot_login(token)
@@ -187,7 +189,7 @@ class QQChannel(BaseChannel):
         self.config: QQConfig = config
         self._client: "botpy.Client | None" = None
         self._processed_ids: deque = deque(maxlen=1000)
-        self._msg_seq: int = 1  # 消息序列号，避免被 QQ API 去重
+        self._msg_seq: int = 1  # Unique sequence for each outbound QQ message.
         self._chat_type_cache: dict[str, str] = {}
 
     async def start(self) -> None:
@@ -252,16 +254,22 @@ class QQChannel(BaseChannel):
         Raises on delivery failure so the channel manager's retry applies.
         """
         if not self._client:
-            logger.warning("QQ client not initialized")
-            return
+            raise RuntimeError("QQ client not initialized")
 
         msg_id = msg.metadata.get("message_id")
-        self._msg_seq += 1
+        # Keep the sequence on this outbound message. Retrying with a new
+        # sequence could duplicate a reply if QQ accepted the first request
+        # but its response was lost.
+        msg_seq = msg.metadata.get("_qq_msg_seq")
+        if msg_seq is None:
+            self._msg_seq += 1
+            msg_seq = self._msg_seq
+            msg.metadata["_qq_msg_seq"] = msg_seq
         use_markdown = self.config.msg_format == "markdown"
         payload: dict[str, Any] = {
             "msg_type": 2 if use_markdown else 0,
             "msg_id": msg_id,
-            "msg_seq": self._msg_seq,
+            "msg_seq": msg_seq,
         }
         if use_markdown:
             payload["markdown"] = {"content": msg.content}
@@ -270,15 +278,20 @@ class QQChannel(BaseChannel):
 
         chat_type = self._chat_type_cache.get(msg.chat_id, "c2c")
         if chat_type == "group":
-            await self._client.api.post_group_message(
+            result = await self._client.api.post_group_message(
                 group_openid=msg.chat_id,
                 **payload,
             )
         else:
-            await self._client.api.post_c2c_message(
+            result = await self._client.api.post_c2c_message(
                 openid=msg.chat_id,
                 **payload,
             )
+        # botpy 1.2.1 returns None after an HTTP timeout or connection reset
+        # instead of raising, so otherwise the manager would mark this send as
+        # successful and never retry it.
+        if result is None:
+            raise RuntimeError("QQ send returned no response")
 
     async def _on_message(self, data: "C2CMessage | GroupMessage", is_group: bool = False) -> None:
         """Handle incoming message from QQ."""
