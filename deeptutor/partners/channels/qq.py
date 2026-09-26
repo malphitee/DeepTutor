@@ -1,9 +1,12 @@
 """QQ channel implementation using botpy SDK."""
 
 import asyncio
+import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urljoin
 
+import httpx
 from loguru import logger
 from pydantic import Field
 
@@ -11,6 +14,32 @@ from deeptutor.partners.bus.events import OutboundMessage
 from deeptutor.partners.bus.queue import MessageBus
 from deeptutor.partners.channels.base import BaseChannel
 from deeptutor.partners.config.schema import DeliveryOverrides
+from deeptutor.partners.helpers import detect_image_mime
+from deeptutor.partners.network import validate_url_target
+
+
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+_IMAGE_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+
+def _attachment_field(attachment: Any, name: str) -> Any:
+    if isinstance(attachment, dict):
+        return attachment.get(name)
+    return getattr(attachment, name, None)
+
+
+def _is_image_attachment(attachment: Any) -> bool:
+    content_type = str(_attachment_field(attachment, "content_type") or "").lower()
+    return (
+        not content_type
+        or content_type == "application/octet-stream"
+        or content_type.startswith("image/")
+    )
 
 try:
     import botpy
@@ -178,7 +207,8 @@ class QQChannel(BaseChannel):
             self._processed_ids.append(data.id)
 
             content = (data.content or "").strip()
-            if not content:
+            attachments = getattr(data, "attachments", None) or []
+            if not content and not attachments:
                 return
 
             if is_group:
@@ -193,11 +223,117 @@ class QQChannel(BaseChannel):
                 user_id = chat_id
                 self._chat_type_cache[chat_id] = "c2c"
 
+            # Do not fetch media from a sender that the Partner will reject.
+            if not self.is_allowed(user_id):
+                await self._handle_message(
+                    sender_id=user_id,
+                    chat_id=chat_id,
+                    content=content,
+                    metadata={"message_id": data.id},
+                )
+                return
+
+            image_attachments = [item for item in attachments if _is_image_attachment(item)]
+            media_paths: list[str] = []
+            for attachment in image_attachments:
+                if path := await self._download_attachment(attachment):
+                    media_paths.append(path)
+            if len(media_paths) < len(image_attachments):
+                failure_text = (
+                    "部分图片未能读取，已收到的图片会继续处理。请重新发送失败的图片。"
+                    if media_paths
+                    else "图片未能读取，请重新发送不超过 8 MiB 的 JPG、PNG、GIF 或 WebP 图片。"
+                )
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=self.name,
+                        chat_id=chat_id,
+                        content=failure_text,
+                        metadata={"message_id": data.id},
+                    )
+                )
+                if not media_paths:
+                    return
+            if not content and not media_paths:
+                return
+
             await self._handle_message(
                 sender_id=user_id,
                 chat_id=chat_id,
                 content=content,
+                media=media_paths,
                 metadata={"message_id": data.id},
             )
         except Exception:
             logger.exception("Error handling QQ message")
+
+    async def _download_attachment(self, attachment: Any) -> str | None:
+        """Download a QQ image to the Partner's media directory for the runner."""
+        if not _is_image_attachment(attachment):
+            return None
+
+        url = _attachment_field(attachment, "url")
+        if not isinstance(url, str) or not url:
+            return None
+        if url.startswith("//"):
+            url = f"https:{url}"
+
+        try:
+            declared_size = int(_attachment_field(attachment, "size") or 0)
+        except (TypeError, ValueError):
+            declared_size = 0
+        if declared_size > _MAX_IMAGE_BYTES:
+            logger.warning("QQ image exceeds the 8 MiB limit")
+            return None
+
+        safe, reason = validate_url_target(url)
+        if not safe:
+            logger.warning("QQ image URL rejected: {}", reason)
+            return None
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=False, trust_env=False
+            ) as client:
+                target = url
+                for _ in range(4):
+                    async with client.stream("GET", target) as response:
+                        if response.is_redirect:
+                            location = response.headers.get("location")
+                            if not location:
+                                logger.warning("QQ image redirect has no location")
+                                return None
+                            target = urljoin(target, location)
+                            safe, reason = validate_url_target(target)
+                            if not safe:
+                                logger.warning("QQ image redirect rejected: {}", reason)
+                                return None
+                            continue
+                        if response.status_code >= 300:
+                            logger.warning("QQ image download returned HTTP {}", response.status_code)
+                            return None
+                        data = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            data.extend(chunk)
+                            if len(data) > _MAX_IMAGE_BYTES:
+                                logger.warning("QQ image exceeds the 8 MiB limit")
+                                return None
+                        break
+                else:
+                    logger.warning("QQ image redirected too many times")
+                    return None
+        except httpx.HTTPError as exc:
+            logger.warning("QQ image download failed: {}", type(exc).__name__)
+            return None
+
+        mime = detect_image_mime(data)
+        if not mime:
+            logger.warning("QQ attachment is not a supported image")
+            return None
+        try:
+            path = self.media_dir() / f"{uuid.uuid4().hex}{_IMAGE_EXTENSIONS[mime]}"
+            await asyncio.to_thread(path.write_bytes, data)
+        except OSError:
+            logger.warning("QQ image could not be saved")
+            return None
+        return str(path)

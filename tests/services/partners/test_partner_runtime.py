@@ -785,6 +785,25 @@ class TestContextAssembly:
         assert records[0]["attachments"][0]["filename"] == "image.png"
 
     @pytest.mark.asyncio
+    async def test_qq_image_without_text_reaches_model_context(
+        self, partners_root, fake_orchestrator
+    ):
+        image_path = partners_root / "qq-image.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        fake_orchestrator.script = finish("saw it")
+        runner = _runner(partners_root)
+        msg = _msg("", channel="qq")
+        msg.media = [str(image_path)]
+
+        await runner.process_message(msg)
+
+        context = fake_orchestrator.seen_contexts[-1]
+        assert context.user_message == ""
+        assert len(context.attachments) == 1
+        assert context.attachments[0].type == "image"
+
+    @pytest.mark.asyncio
     async def test_document_media_becomes_attached_source(self, partners_root, fake_orchestrator):
         doc_path = partners_root / "notes.txt"
         doc_path.parent.mkdir(parents=True, exist_ok=True)
