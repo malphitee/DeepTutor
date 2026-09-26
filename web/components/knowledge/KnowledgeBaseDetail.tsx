@@ -5,10 +5,12 @@ import type { EmbeddingModelSelection } from "@/features/knowledge/model/types";
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import LightRagEmbeddingWarning from "./LightRagEmbeddingWarning";
 import {
   ArrowLeft,
   Database,
   FileText,
+  FolderSync,
   Github,
   Globe,
   Layers,
@@ -21,7 +23,9 @@ import {
 } from "lucide-react";
 import type {
   IndexingLLMSelection,
+  LinkedFolderInfo,
   KnowledgeUploadPolicy,
+  SyncFolderResponse,
 } from "@/features/knowledge/model/types";
 import {
   formatKnowledgeTimestamp,
@@ -42,6 +46,7 @@ import KbDocumentsSection from "./KbDocumentsSection";
 import KbIndexVersionsSection from "./KbIndexVersionsSection";
 import KbSettingsSection from "./KbSettingsSection";
 import KbGitHubSourcesSection from "./KbGitHubSourcesSection";
+import KbLinkedFoldersSection from "./KbLinkedFoldersSection";
 import KbWebSourcesSection from "./KbWebSourcesSection";
 import KbMarginNoteDevicesSection from "./KbMarginNoteDevicesSection";
 import KnowledgeEngineIcon, {
@@ -59,14 +64,19 @@ interface KnowledgeBaseDetailProps {
     files: File[],
     destSubdir?: string,
   ) => Promise<void>;
+  onLinkFolder: (
+    kbName: string,
+    folderPath: string,
+  ) => Promise<LinkedFolderInfo>;
+  onUnlinkFolder: (kbName: string, folderId: string) => Promise<void>;
+  onSyncFolder: (
+    kbName: string,
+    folderId: string,
+  ) => Promise<SyncFolderResponse>;
   onReindex: (
     kbName: string,
-    indexingLLM?: IndexingLLMSelection,
+    configFingerprint?: string,
     embeddingModel?: EmbeddingModelSelection,
-  ) => Promise<void>;
-  onUpdatePendingIndexingPolicy: (
-    kbName: string,
-    indexingLLM: IndexingLLMSelection,
   ) => Promise<void>;
   onRetry: (kbName: string) => Promise<void>;
   onSetDefault: (kbName: string) => Promise<void>;
@@ -81,6 +91,7 @@ const SECTION_CHROME: Record<
 > = {
   files: { label: "Files", Icon: FileText },
   add: { label: "Add documents", Icon: Upload },
+  folders: { label: "Linked folders", Icon: FolderSync },
   github: { label: "GitHub", Icon: Github },
   web: { label: "Web", Icon: Globe },
   versions: { label: "Index versions", Icon: Layers },
@@ -98,8 +109,10 @@ export default function KnowledgeBaseDetail({
   history,
   onCreate,
   onUpload,
+  onLinkFolder,
+  onUnlinkFolder,
+  onSyncFolder,
   onReindex,
-  onUpdatePendingIndexingPolicy,
   onRetry,
   onSetDefault,
   onDelete,
@@ -164,6 +177,10 @@ export default function KnowledgeBaseDetail({
 
   const handleRetry = async () => {
     if (!canRetry || retrySubmitting || isReindexingLocally) return;
+    if (kbProvider(kb) === "lightrag") {
+      setSection("versions");
+      return;
+    }
     setRetrySubmitting(true);
     try {
       await onRetry(knowledgeBaseRef(kb));
@@ -231,6 +248,7 @@ export default function KnowledgeBaseDetail({
                   ? ` · ${t("Last indexed")} ${lastIndexedLabel}`
                   : ""}
               </p>
+              <LightRagEmbeddingWarning kb={kb} />
             </div>
           </div>
           {canRetry && (
@@ -250,7 +268,11 @@ export default function KnowledgeBaseDetail({
               )}
               {retrySubmitting || isReindexingLocally
                 ? t("Retrying…")
-                : t("Retry indexing")}
+                : t(
+                    kbProvider(kb) === "lightrag"
+                      ? "Review rebuild"
+                      : "Retry indexing",
+                  )}
             </button>
           )}
         </div>
@@ -302,23 +324,34 @@ export default function KnowledgeBaseDetail({
                   }
                 />
               )}
+              {activeSection === "folders" && (
+                <KbLinkedFoldersSection
+                  key={knowledgeBaseRef(kb)}
+                  kb={kb}
+                  task={task}
+                  onLinkFolder={async (folderPath) => {
+                    await onLinkFolder(knowledgeBaseRef(kb), folderPath);
+                  }}
+                  onUnlinkFolder={(folderId) => onUnlinkFolder(knowledgeBaseRef(kb), folderId)}
+                  onSyncFolder={(folderId) => onSyncFolder(knowledgeBaseRef(kb), folderId)}
+                />
+              )}
               {activeSection === "versions" && (
                 <KbIndexVersionsSection
                   kb={kb}
                   task={task}
-                  onReindex={(indexingLLM, embeddingModel) =>
+                  onReindex={(configFingerprint, embeddingModel) =>
                     kb.read_only
                       ? Promise.resolve()
                       : status === "error" &&
                           kbProvider(kb) !== "lightrag" &&
                           !embeddingModel
                         ? handleRetry()
-                        : onReindex(knowledgeBaseRef(kb), indexingLLM, embeddingModel)
-                  }
-                  onUpdatePendingIndexingPolicy={(indexingLLM) =>
-                    kb.read_only
-                      ? Promise.resolve()
-                      : onUpdatePendingIndexingPolicy(knowledgeBaseRef(kb), indexingLLM)
+                        : onReindex(
+                            knowledgeBaseRef(kb),
+                            configFingerprint,
+                            embeddingModel,
+                          )
                   }
                 />
               )}
@@ -329,16 +362,23 @@ export default function KnowledgeBaseDetail({
                 <KbWebSourcesSection kbName={knowledgeBaseRef(kb)} />
               )}
               {activeSection === "devices" && (
-                <KbMarginNoteDevicesSection key={knowledgeBaseRef(kb)} kb={kb} />
+                <KbMarginNoteDevicesSection
+                  key={knowledgeBaseRef(kb)}
+                  kb={kb}
+                />
               )}
               {activeSection === "settings" && (
                 <KbSettingsSection
                   kb={kb}
                   onSetDefault={() =>
-                    kb.read_only ? Promise.resolve() : onSetDefault(knowledgeBaseRef(kb))
+                    kb.read_only
+                      ? Promise.resolve()
+                      : onSetDefault(knowledgeBaseRef(kb))
                   }
                   onDelete={() =>
-                    kb.read_only ? Promise.resolve() : onDelete(knowledgeBaseRef(kb))
+                    kb.read_only
+                      ? Promise.resolve()
+                      : onDelete(knowledgeBaseRef(kb))
                   }
                 />
               )}
