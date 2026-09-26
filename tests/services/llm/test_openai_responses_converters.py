@@ -18,6 +18,41 @@ class TestAdaptChatKwargsToResponses:
         result = adapt_chat_kwargs_to_responses({"temperature": 0.2, "response_format": None})
         assert result == {"temperature": 0.2}
 
+    def test_translates_json_object_response_format_to_text_format(self) -> None:
+        result = adapt_chat_kwargs_to_responses(
+            {"response_format": {"type": "json_object"}, "temperature": 0.2}
+        )
+        assert result == {
+            "text": {"format": {"type": "json_object"}},
+            "temperature": 0.2,
+        }
+        assert "response_format" not in result
+
+    def test_translates_chat_json_schema_response_format_to_text_format(self) -> None:
+        result = adapt_chat_kwargs_to_responses(
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "strict": True,
+                        "schema": {"type": "object"},
+                    },
+                }
+            }
+        )
+        assert result == {
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer",
+                    "strict": True,
+                    "schema": {"type": "object"},
+                }
+            }
+        }
+        assert "response_format" not in result
+
     def test_translates_max_completion_tokens_to_max_output_tokens(self) -> None:
         # Regression for DeepTutor#437: gpt-5.x callers pass
         # `max_completion_tokens` from `get_token_limit_kwargs(model, n)`,

@@ -271,6 +271,7 @@ async def test_forced_responses_agentic_stream_maps_tool_calls(monkeypatch) -> N
         messages=[{"role": "user", "content": "Find it"}],
         tools=tools,
         tool_choice="auto",
+        response_format={"type": "json_object"},
         max_completion_tokens=512,
         stream=True,
     )
@@ -279,9 +280,50 @@ async def test_forced_responses_agentic_stream_maps_tool_calls(monkeypatch) -> N
     assert captured["init"]["base_url"] == "https://gateway.example/v1"
     assert captured["request"]["stream"] is True
     assert captured["request"]["tools"][0]["name"] == "lookup"
+    assert captured["request"]["text"] == {"format": {"type": "json_object"}}
+    assert "response_format" not in captured["request"]
     assert "messages" not in captured["request"]
     assert chunks[-2].choices[0].delta.tool_calls[0].function.name == "lookup"
     assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_forced_responses_non_stream_maps_response_format() -> None:
+    captured: dict = {}
+
+    class FakeResponses:
+        async def create(self, **kwargs):
+            captured["request"] = kwargs
+            return {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ],
+            }
+
+    class UnexpectedChatCompletions:
+        async def create(self, **_kwargs):
+            raise AssertionError("forced Responses mode must not call chat completions")
+
+    provider = _provider(wire_api="responses")
+    provider._client = SimpleNamespace(
+        responses=FakeResponses(),
+        chat=SimpleNamespace(completions=UnexpectedChatCompletions()),
+    )
+
+    result = await provider.chat(
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort="xhigh",
+        response_format={"type": "json_object"},
+    )
+
+    assert result.content == "ok"
+    assert captured["request"]["text"] == {"format": {"type": "json_object"}}
+    assert "response_format" not in captured["request"]
 
 
 class _EndpointError(RuntimeError):
