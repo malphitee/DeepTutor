@@ -51,19 +51,14 @@ def user_from_token_payload(payload: Any | None) -> CurrentUser:
     user_id = str(getattr(payload, "user_id", "") or "")
     username = str(getattr(payload, "username", "") or "local")
     role = str(getattr(payload, "role", "user") or "user")
-    # Decode normally performs this lookup already.  Re-check here as a second
-    # boundary for adapters/tests that pass a TokenPayload directly: a stale
-    # role claim must never turn into an admin CurrentUser after an account
-    # change, and disabled/deleted accounts must fail closed.
+    # Revalidate role and account status against the identity store. A stale
+    # role claim must never become an admin scope after an account change.
     record: tuple[str, dict[str, Any]] | None = None
     if user_id:
         from .identity import get_user_by_id
 
         record = get_user_by_id(user_id)
         if record is None:
-            # The auth.json bootstrap admin exists only in the overlay that
-            # decode_token authorizes against; resolve it the same way before
-            # treating the account as unknown.
             from deeptutor.services.auth import account_by_id
 
             record = account_by_id(user_id)
@@ -78,11 +73,6 @@ def user_from_token_payload(payload: Any | None) -> CurrentUser:
 
         if user_id and deleted_identity_revoked(username, user_id):
             raise PermissionError("This account is no longer available")
-        # No local record vouches for this identity. PocketBase is the
-        # authority in PocketBase mode (its role was just re-read via
-        # auth-refresh), and the server-minted local-admin synthetic identity
-        # passes as-is; every other claim must be plain "user", mirroring
-        # decode_token's unknown-account rule.
         from deeptutor.services.auth import POCKETBASE_ENABLED
 
         is_local_admin_identity = user_id == LOCAL_ADMIN_ID or (

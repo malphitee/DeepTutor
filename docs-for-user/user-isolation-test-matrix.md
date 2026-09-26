@@ -4,6 +4,12 @@
 测试矩阵，标记现有覆盖与缺口。测试本体随阶段 1–5 落地，本表是它们与计划的
 对照索引。运行方式：`pytest -q tests`（CI 配置见 `.github/workflows/tests.yml`）。
 
+官方发布同步另有无路径过滤的 `.github/workflows/user-isolation.yml` 门禁，
+Docker 发布在该门禁成功后才开始。流程见 [上游同步说明](upstream-sync.md)。
+新增 `tests/multi_user/test_release_sync_isolation.py` 覆盖真实认证下的双账号
+知识库/会话及 RAG 授权和共享目录配置；
+`test_legacy_workspace_root_isolation.py` 覆盖旧 catalog 外部根和迁移源越界。
+
 ## 1. 安全不变量 → 测试映射
 
 | # | 不变量（计划 §2） | 覆盖测试 |

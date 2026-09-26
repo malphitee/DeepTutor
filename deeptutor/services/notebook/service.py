@@ -218,7 +218,7 @@ class NotebookManager:
             raise NotebookCorruptedError(notebook_id, filepath, exc) from exc
         if self._sanitize_loaded_notebook(notebook):
             try:
-                self._save_notebook(notebook)
+                self._save_notebook(notebook_id, notebook)
             except Exception:
                 logger.warning("could not persist sanitized notebook %s", notebook_id)
         return notebook
@@ -238,8 +238,8 @@ class NotebookManager:
                 changed = True
         return changed
 
-    def _save_notebook(self, notebook: dict) -> None:
-        atomic_write_json(self._get_notebook_file(notebook["id"]), notebook)
+    def _save_notebook(self, notebook_id: str, notebook: dict) -> None:
+        atomic_write_json(self._get_notebook_file(notebook_id), notebook)
 
     def _touch_index_entry(self, notebook_id: str, notebook: dict) -> None:
         """Refresh this notebook's index row, re-adding it if it went missing."""
@@ -277,7 +277,7 @@ class NotebookManager:
         }
 
         with self._locked(notebook_id):
-            self._save_notebook(notebook)
+            self._save_notebook(notebook_id, notebook)
             self._touch_index_entry(notebook_id, notebook)
         return notebook
 
@@ -395,7 +395,7 @@ class NotebookManager:
                 notebook["icon"] = icon
 
             notebook["updated_at"] = time.time()
-            self._save_notebook(notebook)
+            self._save_notebook(notebook_id, notebook)
             self._touch_index_entry(notebook_id, notebook)
             return notebook
 
@@ -464,7 +464,7 @@ class NotebookManager:
                 # others — use ``copy_record`` for an explicit independent copy.
                 notebook.setdefault("records", []).append(dict(record))
                 notebook["updated_at"] = now
-                self._save_notebook(notebook)
+                self._save_notebook(notebook_id, notebook)
                 self._touch_index_entry(notebook_id, notebook)
                 added_to.append(notebook_id)
 
@@ -534,7 +534,7 @@ class NotebookManager:
                 return None
 
             notebook["updated_at"] = time.time()
-            self._save_notebook(notebook)
+            self._save_notebook(notebook_id, notebook)
             self._touch_index_entry(notebook_id, notebook)
             return updated_record
 
@@ -586,7 +586,7 @@ class NotebookManager:
                 return False
 
             notebook["updated_at"] = time.time()
-            self._save_notebook(notebook)
+            self._save_notebook(notebook_id, notebook)
             self._touch_index_entry(notebook_id, notebook)
             return True
 
@@ -619,7 +619,7 @@ class NotebookManager:
                 return None
             target.setdefault("records", []).append(copied)
             target["updated_at"] = time.time()
-            self._save_notebook(target)
+            self._save_notebook(target_notebook_id, target)
             self._touch_index_entry(target_notebook_id, target)
         return copied
 

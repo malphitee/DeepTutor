@@ -16,7 +16,11 @@ import {
   decodeResourceSegment,
   knowledgeBaseRoute,
 } from "@/lib/resource-routes";
-import type { IndexingLLMSelection } from "@/features/knowledge/model/types";
+import type {
+  IndexingLLMSelection,
+  LinkedFolderInfo,
+  SyncFolderResponse,
+} from "@/features/knowledge/model/types";
 
 const panelLoading = () => (
   <div
@@ -76,11 +80,13 @@ function KnowledgePageContent({ kbName, searchParams }: {
     uploadFiles,
     setDefault,
     reindex,
-    updatePendingIndexingPolicy,
     retry,
     deleteKb,
     connectObsidian,
     connectLinkedFolder,
+    linkFolder,
+    unlinkFolder,
+    syncLinkedFolder,
     connectLightRagServer,
     connectWeKnora,
     connectMarginNote4,
@@ -157,13 +163,13 @@ function KnowledgePageContent({ kbName, searchParams }: {
     // request is still in flight. Once loading finishes, the normal existence
     // check below may repair an actually stale name to the default KB.
     if (loading && explicitSelection) return explicitSelection;
-    const exact = kbs.find(kb => knowledgeBaseRef(kb) === explicitSelection);
+    const exact = kbs.find((kb) => knowledgeBaseRef(kb) === explicitSelection);
     if (exact) return knowledgeBaseRef(exact);
-    const legacy = kbs.filter(kb => kb.name === explicitSelection);
+    const legacy = kbs.filter((kb) => kb.name === explicitSelection);
     if (legacy.length === 1) return knowledgeBaseRef(legacy[0]);
     if (explicitSelection) return explicitSelection;
     if (!kbs.length) return null;
-    return knowledgeBaseRef(kbs.find(kb => kb.is_default) ?? kbs[0]);
+    return knowledgeBaseRef(kbs.find((kb) => kb.is_default) ?? kbs[0]);
   }, [explicitSelection, kbs, loading]);
 
   const selectedKb = useMemo(
@@ -239,8 +245,16 @@ function KnowledgePageContent({ kbName, searchParams }: {
     async (name: string) => {
       try {
         const workspaces = await resourceUsage("knowledge_bases", name);
-        const impact = workspaces.length ? "\n\n" + t("Used by workspaces: {{names}}", { names: workspaces.join(", ") }) : "";
-        if (!window.confirm(t('Delete knowledge base "{{name}}"?', { name }) + impact)) return;
+        const impact = workspaces.length
+          ? "\n\n" +
+            t("Used by workspaces: {{names}}", { names: workspaces.join(", ") })
+          : "";
+        if (
+          !window.confirm(
+            t('Delete knowledge base "{{name}}"?', { name }) + impact,
+          )
+        )
+          return;
         await deleteKb(name);
         if (explicitSelection === name) {
           setExplicitSelection(null);
@@ -265,32 +279,56 @@ function KnowledgePageContent({ kbName, searchParams }: {
     [setError, uploadFiles],
   );
 
+  const handleLinkFolder = useCallback(
+    async (kbName: string, folderPath: string): Promise<LinkedFolderInfo> => {
+      try {
+        return await linkFolder(kbName, folderPath);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        throw err;
+      }
+    },
+    [linkFolder, setError],
+  );
+
+  const handleUnlinkFolder = useCallback(
+    async (kbName: string, folderId: string): Promise<void> => {
+      try {
+        await unlinkFolder(kbName, folderId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        throw err;
+      }
+    },
+    [setError, unlinkFolder],
+  );
+
+  const handleSyncFolder = useCallback(
+    async (kbName: string, folderId: string): Promise<SyncFolderResponse> => {
+      try {
+        return await syncLinkedFolder(kbName, folderId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        throw err;
+      }
+    },
+    [setError, syncLinkedFolder],
+  );
+
   const handleReindex = useCallback(
     async (
       kbName: string,
-      indexingLLM?: IndexingLLMSelection,
+      configFingerprint?: string,
       embeddingModel?: EmbeddingModelSelection,
     ) => {
       try {
-        await reindex(kbName, indexingLLM, embeddingModel);
+        await reindex(kbName, configFingerprint, embeddingModel);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         throw err;
       }
     },
     [reindex, setError],
-  );
-
-  const handleUpdatePendingIndexingPolicy = useCallback(
-    async (kbName: string, indexingLLM: IndexingLLMSelection) => {
-      try {
-        await updatePendingIndexingPolicy(kbName, indexingLLM);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-        throw err;
-      }
-    },
-    [setError, updatePendingIndexingPolicy],
   );
 
   const handleRetry = useCallback(
@@ -386,12 +424,20 @@ function KnowledgePageContent({ kbName, searchParams }: {
             <KnowledgeBaseDetail
               kb={selectedKb}
               uploadPolicy={uploadPolicy}
-              task={selectedKb ? tasksByKb[knowledgeBaseRef(selectedKb)] : undefined}
-              history={selectedKb ? (historyByKb[knowledgeBaseRef(selectedKb)] ?? []) : []}
+              task={
+                selectedKb ? tasksByKb[knowledgeBaseRef(selectedKb)] : undefined
+              }
+              history={
+                selectedKb
+                  ? (historyByKb[knowledgeBaseRef(selectedKb)] ?? [])
+                  : []
+              }
               onCreate={openCreate}
               onUpload={handleUpload}
+              onLinkFolder={handleLinkFolder}
+              onUnlinkFolder={handleUnlinkFolder}
+              onSyncFolder={handleSyncFolder}
               onReindex={handleReindex}
-              onUpdatePendingIndexingPolicy={handleUpdatePendingIndexingPolicy}
               onRetry={handleRetry}
               onSetDefault={handleSetDefault}
               onDelete={handleDelete}

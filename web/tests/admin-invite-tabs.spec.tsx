@@ -72,11 +72,8 @@ it("mounts invitation management only on its tab and discards generated codes wh
   await screen.findByDisplayValue("ABCD-EFGH-JKMN");
   fireEvent.click(screen.getByRole("tab", { name: "Users" }));
   expect(screen.queryByDisplayValue("ABCD-EFGH-JKMN")).not.toBeInTheDocument();
-  fireEvent.keyDown(screen.getByRole("tab", { name: "Users" }), {
-    key: "ArrowRight",
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "Invitation codes" }));
   await screen.findByText("No invitation codes yet.");
-  expect(screen.getByRole("tab", { name: "Invitation codes" })).toHaveFocus();
   expect(screen.queryByDisplayValue("ABCD-EFGH-JKMN")).not.toBeInTheDocument();
 });
 

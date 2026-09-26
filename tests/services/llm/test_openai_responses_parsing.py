@@ -288,6 +288,28 @@ def test_nonstream_response_preserves_deepseek_reasoning_text_and_native_items()
     ]
 
 
+def test_plain_text_responses_payload_does_not_call_vars_on_a_string() -> None:
+    """Gateways may unwrap a short Responses result to its text body."""
+    result = parse_response_output("OK")
+
+    assert result.content == "OK"
+    assert result.finish_reason == "stop"
+
+
+def test_output_item_list_responses_payload_is_normalized() -> None:
+    """A JSON gateway may return the output array without the response envelope."""
+    result = parse_response_output(
+        [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "OK"}],
+            }
+        ]
+    )
+
+    assert result.content == "OK"
+
+
 @pytest.mark.asyncio
 async def test_sdk_failed_terminal_event_is_not_misreported_as_stop() -> None:
     with pytest.raises(RuntimeError, match="Response failed"):

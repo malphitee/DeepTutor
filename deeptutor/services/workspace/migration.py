@@ -44,6 +44,9 @@ def migrate_locations(
         for row, destination in moves:
             source = Path(row["path"]).resolve()
             destination = destination.expanduser().resolve()
+            # A legacy registration is not proof that its source is still
+            # owned by this account. Check before copying any source files.
+            service._assert_allowed_root(source)
             if source == destination:
                 continue
             service._assert_allowed_root(destination)
