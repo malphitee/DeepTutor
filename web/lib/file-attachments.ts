@@ -16,13 +16,33 @@ const IMAGE_EXTENSION_BY_MIME: Record<ModelImageMime, string> = {
   "image/webp": ".webp",
 };
 
-const MAX_CONVERTED_PIXELS = 16_000_000;
-const MAX_CONVERTED_EDGE = 4_096;
+/**
+ * Model-facing images are deliberately smaller than the upload hard cap.
+ * Keeping this policy here gives every composer one normalization seam before
+ * base64 expansion, attachment-store persistence, history replay, or tools can
+ * duplicate the payload.
+ */
+export const MODEL_IMAGE_TARGET_BYTES = 3 * 1024 * 1024;
+export const MODEL_IMAGE_MAX_PIXELS = 6_000_000;
+export const MODEL_IMAGE_MAX_EDGE = 2_560;
+export const MAX_SOURCE_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_SOURCE_IMAGE_PIXELS = 64_000_000;
+
+const MODEL_IMAGE_INITIAL_QUALITY = 0.88;
+const MODEL_IMAGE_MIN_QUALITY = 0.68;
+const MODEL_IMAGE_ENCODE_ATTEMPTS = 5;
 
 export class InvalidImageAttachmentError extends Error {
   constructor() {
     super("The selected file does not contain a valid image.");
     this.name = "InvalidImageAttachmentError";
+  }
+}
+
+export class ImageAttachmentTooLargeError extends Error {
+  constructor() {
+    super("The image exceeds the safe processing size.");
+    this.name = "ImageAttachmentTooLargeError";
   }
 }
 
@@ -59,12 +79,7 @@ export function sniffModelImageMime(bytes: Uint8Array): ModelImageMime | null {
   ) {
     return "image/png";
   }
-  if (
-    bytes.length >= 3 &&
-    bytes[0] === 0xff &&
-    bytes[1] === 0xd8 &&
-    bytes[2] === 0xff
-  ) {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
     return "image/jpeg";
   }
   if (
@@ -156,9 +171,7 @@ function isLikelyHeic(file: File, bytes: Uint8Array): boolean {
   }
   if (bytes.length < 12) return false;
   const brand = String.fromCharCode(...bytes.slice(8, 12));
-  return new Set(["heic", "heix", "hevc", "hevx", "heim", "heis"]).has(
-    brand,
-  );
+  return new Set(["heic", "heix", "hevc", "hevx", "heim", "heis"]).has(brand);
 }
 
 async function convertHeicToJpeg(file: File): Promise<Blob> {
@@ -179,33 +192,114 @@ async function convertHeicToJpeg(file: File): Promise<Blob> {
   }
 }
 
-async function rasterizeImage(
-  decoded: DecodedImage,
-  mimeType: "image/jpeg" | "image/png",
-  quality?: number,
-): Promise<Blob> {
-  if (decoded.width <= 0 || decoded.height <= 0) {
-    throw new InvalidImageAttachmentError();
-  }
+function normalizedDimensions(decoded: DecodedImage): {
+  width: number;
+  height: number;
+} {
   const scale = Math.min(
     1,
-    MAX_CONVERTED_EDGE / Math.max(decoded.width, decoded.height),
-    Math.sqrt(MAX_CONVERTED_PIXELS / (decoded.width * decoded.height)),
+    MODEL_IMAGE_MAX_EDGE / Math.max(decoded.width, decoded.height),
+    Math.sqrt(MODEL_IMAGE_MAX_PIXELS / (decoded.width * decoded.height))
   );
-  const width = Math.max(1, Math.round(decoded.width * scale));
-  const height = Math.max(1, Math.round(decoded.height * scale));
+  return {
+    width: Math.max(1, Math.round(decoded.width * scale)),
+    height: Math.max(1, Math.round(decoded.height * scale)),
+  };
+}
+
+function needsModelNormalization(file: Blob, decoded: DecodedImage, targetBytes: number): boolean {
+  return (
+    file.size > targetBytes ||
+    Math.max(decoded.width, decoded.height) > MODEL_IMAGE_MAX_EDGE ||
+    decoded.width * decoded.height > MODEL_IMAGE_MAX_PIXELS
+  );
+}
+
+async function encodeRaster(
+  decoded: DecodedImage,
+  mimeType: "image/jpeg" | "image/png" | "image/webp",
+  width: number,
+  height: number,
+  quality: number | undefined
+): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new InvalidImageAttachmentError();
+  if (mimeType === "image/jpeg") {
+    // JPEG has no alpha channel. A white matte avoids browser-dependent black
+    // backgrounds when converting transparent HEIC/AVIF-like inputs.
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+  }
   context.drawImage(decoded.source, 0, 0, width, height);
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new InvalidImageAttachmentError());
-    }, mimeType, quality);
-  });
+  try {
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        blob => {
+          if (blob?.size) resolve(blob);
+          else reject(new InvalidImageAttachmentError());
+        },
+        mimeType,
+        quality
+      );
+    });
+  } finally {
+    // Release the backing pixels between attempts, especially on mobile.
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+async function rasterizeImage(
+  decoded: DecodedImage,
+  mimeType: "image/jpeg" | "image/png" | "image/webp",
+  targetBytes: number
+): Promise<Blob> {
+  if (decoded.width <= 0 || decoded.height <= 0) {
+    throw new InvalidImageAttachmentError();
+  }
+  let { width, height } = normalizedDimensions(decoded);
+  let currentQuality = MODEL_IMAGE_INITIAL_QUALITY;
+  let lastBlob: Blob | null = null;
+
+  for (let attempt = 0; attempt < MODEL_IMAGE_ENCODE_ATTEMPTS; attempt += 1) {
+    lastBlob = await encodeRaster(
+      decoded,
+      mimeType,
+      width,
+      height,
+      mimeType === "image/png" ? undefined : currentQuality
+    );
+    if (lastBlob.size <= targetBytes) return lastBlob;
+    if (attempt === MODEL_IMAGE_ENCODE_ATTEMPTS - 1) break;
+
+    // Try preserving text/line art losslessly first. WebP keeps alpha when PNG
+    // is too large; browsers without a WebP encoder return PNG, which is still
+    // shrunk below the byte budget on subsequent attempts.
+    if (mimeType === "image/png" && attempt === 0) {
+      mimeType = "image/webp";
+      continue;
+    }
+
+    // Encoded byte size is roughly proportional to pixel count. Shrink both
+    // dimensions using its square root, with a small safety margin, then lower
+    // lossy quality gradually. The clamp keeps each retry materially useful
+    // without making a single unexpectedly large encoding unreadably small.
+    const scale = Math.min(0.9, Math.max(0.5, Math.sqrt(targetBytes / lastBlob.size) * 0.95));
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
+    currentQuality = Math.max(MODEL_IMAGE_MIN_QUALITY, currentQuality - 0.06);
+  }
+
+  throw new ImageAttachmentTooLargeError();
+}
+
+function encodedMime(blob: Blob, fallback: ModelImageMime): ModelImageMime {
+  return MODEL_IMAGE_MIME_TYPES.includes(blob.type as ModelImageMime)
+    ? (blob.type as ModelImageMime)
+    : fallback;
 }
 
 export interface PreparedImageFile {
@@ -214,24 +308,43 @@ export interface PreparedImageFile {
   mimeType: ModelImageMime;
 }
 
-/** Validate an image and convert browser-decodable non-provider formats. */
-export async function prepareImageForModel(file: File): Promise<PreparedImageFile> {
+/** Validate, orient, and bound images before upload and base64 expansion. */
+export async function prepareImageForModel(
+  file: File,
+  maxBytes = MODEL_IMAGE_TARGET_BYTES
+): Promise<PreparedImageFile> {
+  if (file.size > MAX_SOURCE_IMAGE_BYTES || !Number.isFinite(maxBytes) || maxBytes <= 0) {
+    throw new ImageAttachmentTooLargeError();
+  }
+  const targetBytes = Math.min(maxBytes, MODEL_IMAGE_TARGET_BYTES);
   const header = await readBlobBytes(file.slice(0, 32));
-  const detectedMime = sniffModelImageMime(header);
+  let detectedMime = sniffModelImageMime(header);
+  // A PNG advertises its dimensions before decoding: reject decompression
+  // bombs without allocating their pixel buffer.
+  if (detectedMime === "image/png" && header.length >= 24) {
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    if (view.getUint32(16) * view.getUint32(20) > MAX_SOURCE_IMAGE_PIXELS) {
+      throw new ImageAttachmentTooLargeError();
+    }
+  }
   let decoded: DecodedImage;
   try {
     decoded = await decodeImage(file);
   } catch (error) {
     if (!isLikelyHeic(file, header)) throw error;
     const blob = await convertHeicToJpeg(file);
-    return {
-      blob,
-      filename: convertedFilename(file.name, "image/jpeg"),
-      mimeType: "image/jpeg",
-    };
+    // Codec output can still be a full-resolution 48 MP photo. Feed it through
+    // exactly the same dimension/byte budget instead of returning it early.
+    file = new File([blob], convertedFilename(file.name, "image/jpeg"), { type: "image/jpeg" });
+    detectedMime = "image/jpeg";
+    decoded = await decodeImage(file);
   }
   try {
-    if (detectedMime) {
+    if (decoded.width * decoded.height > MAX_SOURCE_IMAGE_PIXELS) {
+      throw new ImageAttachmentTooLargeError();
+    }
+    if (decoded.width <= 0 || decoded.height <= 0) throw new InvalidImageAttachmentError();
+    if (detectedMime && !needsModelNormalization(file, decoded, targetBytes)) {
       return {
         blob: file,
         filename: convertedFilename(file.name, detectedMime),
@@ -240,12 +353,15 @@ export async function prepareImageForModel(file: File): Promise<PreparedImageFil
     }
 
     const heic = isLikelyHeic(file, header);
-    const mimeType = heic ? "image/jpeg" : "image/png";
-    const blob = await rasterizeImage(
-      decoded,
-      mimeType,
-      heic ? 0.9 : undefined,
-    );
+    const requestedMime = heic
+      ? "image/jpeg"
+      : detectedMime === "image/jpeg"
+        ? "image/jpeg"
+        : detectedMime === "image/webp" || detectedMime === "image/gif"
+          ? "image/webp"
+          : "image/png";
+    const blob = await rasterizeImage(decoded, requestedMime, targetBytes);
+    const mimeType = encodedMime(blob, requestedMime);
     return {
       blob,
       filename: convertedFilename(file.name, mimeType),

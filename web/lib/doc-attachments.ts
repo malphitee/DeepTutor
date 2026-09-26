@@ -159,8 +159,8 @@ export const SUPPORTED_DOC_EXTS = [...OFFICE_EXTS, ...TEXT_LIKE_EXTS] as const;
 
 /** Raster image extensions accepted by the composer.
  *
- * Only JPG/PNG/GIF/WebP are sent to model providers unchanged. The remaining
- * formats are admitted here so the browser can convert them before upload.
+ * Small JPG/PNG/GIF/WebP are preserved. Large images and the remaining formats
+ * are normalized to provider-safe images within the model input budget.
  */
 export const SUPPORTED_IMAGE_EXTS = [
   ".jpg",

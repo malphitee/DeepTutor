@@ -25,6 +25,7 @@ interface ComposerInputProps {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   isVisualizeMode: boolean;
   isStreaming?: boolean;
+  attachmentsPreparing?: boolean;
   // When true, parent has attachments/references queued and will accept a
   // send even if the text body is empty. Without this, Enter would silently
   // do nothing for an attachment-only message.
@@ -141,6 +142,7 @@ export const ComposerInput = memo(
       textareaRef,
       isVisualizeMode,
       isStreaming = false,
+      attachmentsPreparing = false,
       canSendEmpty,
       onSend,
       onInputChange,
@@ -269,6 +271,7 @@ export const ComposerInput = memo(
     }, [setInputBoth, onInputChange, onOpenPersonaSelector]);
 
     const doSend = useCallback(() => {
+      if (attachmentsPreparing) return;
       const content = inputRef.current.trim();
       // Allow sending when text is empty but the parent has attachments or
       // references queued (canSendEmpty). This matches the send-button's
@@ -279,7 +282,7 @@ export const ComposerInput = memo(
       onInputChange("");
       setShowAtPopup(false);
       setShowSlashPopup(false);
-    }, [canSendEmpty, onSend, setInputBoth, onInputChange]);
+    }, [attachmentsPreparing, canSendEmpty, onSend, setInputBoth, onInputChange]);
 
     const clearTrailingMention = useCallback(() => {
       const next = stripTrailingAtMention(inputRef.current);

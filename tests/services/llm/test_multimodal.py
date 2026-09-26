@@ -15,14 +15,19 @@ allowlist.
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 from types import SimpleNamespace
 from urllib.parse import quote
 
+from PIL import Image
 import pytest
 
+from deeptutor.services.llm.model_images import MAX_MODEL_BYTES, ModelImageError
 from deeptutor.services.llm.multimodal import (
     has_image_parts,
+    hydrate_multimodal_messages,
     prepare_multimodal_messages,
+    resolve_image_for_model,
     should_degrade_to_text,
     strip_image_parts,
     strip_image_parts_inplace,
@@ -34,7 +39,10 @@ def _msgs() -> list[dict]:
     return [{"role": "user", "content": "describe"}]
 
 
-_PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKE").decode("ascii")
+_png_buffer = BytesIO()
+Image.new("RGB", (8, 8), "white").save(_png_buffer, format="PNG")
+_PNG_BYTES = _png_buffer.getvalue()
+_PNG_B64 = base64.b64encode(_PNG_BYTES).decode("ascii")
 
 
 def _img_part_url(message: dict) -> str:
@@ -76,9 +84,7 @@ def test_unknown_provider_still_injects_images() -> None:
     result = prepare_multimodal_messages(
         _msgs(), [att], binding="some-unregistered-provider", model="doubao-1.5-vision-pro"
     )
-    assert _img_part_url(result.messages[0]).startswith(
-        f"data:image/png;base64,{_PNG_B64}"
-    )
+    assert _img_part_url(result.messages[0]).startswith(f"data:image/png;base64,{_PNG_B64}")
 
 
 def test_invalid_or_unsupported_inline_image_is_dropped_before_provider_call() -> None:
@@ -89,19 +95,15 @@ def test_invalid_or_unsupported_inline_image_is_dropped_before_provider_call() -
         filename="broken.heic",
     )
 
-    result = prepare_multimodal_messages(
-        _msgs(), [att], binding="openai", model="gpt-4o"
-    )
+    result = prepare_multimodal_messages(_msgs(), [att], binding="openai", model="gpt-4o")
 
     assert result.invalid_images_dropped == 1
-    assert not any(
-        part.get("type") == "image_url" for part in result.messages[0]["content"]
-    )
+    assert not any(part.get("type") == "image_url" for part in result.messages[0]["content"])
     assert "skipped" in result.messages[0]["content"][-1]["text"].lower()
 
 
 def test_inline_image_mime_is_derived_from_bytes_not_browser_metadata() -> None:
-    raw = b"\x89PNG\r\n\x1a\nFAKE"
+    raw = _PNG_BYTES
     att = SimpleNamespace(
         type="image",
         base64=base64.b64encode(raw).decode("ascii"),
@@ -109,9 +111,7 @@ def test_inline_image_mime_is_derived_from_bytes_not_browser_metadata() -> None:
         filename="wrong.jpg",
     )
 
-    result = prepare_multimodal_messages(
-        _msgs(), [att], binding="openai", model="gpt-4o"
-    )
+    result = prepare_multimodal_messages(_msgs(), [att], binding="openai", model="gpt-4o")
 
     assert result.invalid_images_dropped == 0
     assert _img_part_url(result.messages[0]).startswith("data:image/png;base64,")
@@ -122,9 +122,7 @@ def test_text_only_model_still_injects_images() -> None:
     image is injected optimistically; degrade happens later via Stage 2."""
     att = SimpleNamespace(type="image", base64=_PNG_B64, mime_type="image/png")
     result = prepare_multimodal_messages(_msgs(), [att], binding="moonshot", model="moonshot-v1-8k")
-    assert _img_part_url(result.messages[0]).startswith(
-        f"data:image/png;base64,{_PNG_B64}"
-    )
+    assert _img_part_url(result.messages[0]).startswith(f"data:image/png;base64,{_PNG_B64}")
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +147,7 @@ def test_moonshot_kimi_resolves_local_attachment_url(tmp_path, monkeypatch) -> N
     attachment_store.reset_attachment_store()
 
     sid, aid, name = "sess1", "att1", "cat.png"
-    raw_bytes = b"\x89PNG\r\n\x1a\nFAKE"
+    raw_bytes = _PNG_BYTES
     session_dir = tmp_path / sid
     session_dir.mkdir(parents=True)
     (session_dir / f"{aid}_{name}").write_bytes(raw_bytes)
@@ -238,3 +236,127 @@ def test_strip_image_parts_returns_new_list_without_mutating() -> None:
     assert has_image_parts(stripped) is False
     # Original is untouched (new-list variant).
     assert has_image_parts(msgs) is True
+
+
+def _large_png_bytes() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (5712, 4284), "white").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("binding", ["openai", "anthropic"])
+def test_hydrate_bounds_legacy_inline_history_without_mutating_it(binding):
+    raw = _large_png_bytes()
+    original_url = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    history = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": original_url}}]}
+    ]
+    hydrated = hydrate_multimodal_messages(history, binding=binding)
+    assert history[0]["content"][0]["image_url"]["url"] == original_url
+    part = hydrated[0]["content"][0]
+    encoded = (
+        part["source"]["data"] if binding == "anthropic" else part["image_url"]["url"].split(",")[1]
+    )
+    payload = base64.b64decode(encoded)
+    assert len(payload) <= MAX_MODEL_BYTES
+    assert Image.open(BytesIO(payload)).size == (2560, 1920)
+
+
+def test_anthropic_history_is_normalized_for_an_openai_provider():
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": _PNG_B64,
+                    },
+                }
+            ],
+        }
+    ]
+    assert (
+        _img_part_url(hydrate_multimodal_messages(history)[0])
+        == f"data:image/png;base64,{_PNG_B64}"
+    )
+
+
+def test_hydrate_missing_local_or_invalid_image_surfaces_placeholder():
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "/files/attachments/missing/none/x.png"},
+                },
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}},
+            ],
+        }
+    ]
+    result = hydrate_multimodal_messages(history)
+    assert all(
+        part["type"] == "text" and "skipped" in part["text"] for part in result[0]["content"]
+    )
+
+
+def test_initial_local_image_and_history_share_private_cached_variant(tmp_path, monkeypatch):
+    import deeptutor.services.storage as storage
+
+    first_store = attachment_store.LocalDiskAttachmentStore(root=tmp_path / "user-one")
+    second_store = attachment_store.LocalDiskAttachmentStore(root=tmp_path / "user-two")
+    for store, payload in ((first_store, _large_png_bytes()), (second_store, _PNG_BYTES)):
+        target = store.root / "sess" / "att_photo.png"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(payload)
+    monkeypatch.setattr(storage, "get_attachment_store", lambda: first_store)
+    url = "/files/attachments/sess/att/photo.png"
+    # The persisted source takes precedence over inline bytes on this scoped URL.
+    result = prepare_multimodal_messages(
+        _msgs(), [SimpleNamespace(type="image", url=url, base64="ignored")]
+    )
+    first_payload = _img_part_url(result.messages[0])
+    assert len(list((first_store.root / "sess").glob("*.model-v1"))) == 1
+    assert (
+        _img_part_url(
+            hydrate_multimodal_messages(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": url}},
+                        ],
+                    }
+                ]
+            )[0]
+        )
+        == first_payload
+    )
+    # Identical IDs in another account cannot reuse the first account's cache.
+    monkeypatch.setattr(storage, "get_attachment_store", lambda: second_store)
+    assert resolve_image_for_model(url=url) == (_PNG_B64, "image/png")
+    assert not list((second_store.root / "sess").glob("*.model-v1"))
+
+
+def test_resolver_does_not_read_remote_urls_with_local_looking_paths():
+    assert (
+        resolve_image_for_model(url="https://example.com/files/attachments/sess/att/photo.png")
+        is None
+    )
+    with pytest.raises(ModelImageError, match="base64"):
+        resolve_image_for_model(base64_data="not base64")
+
+
+@pytest.mark.parametrize("detail", ["low", "high", "auto"])
+@pytest.mark.parametrize(
+    "url", [f"data:image/png;base64,{_PNG_B64}", "https://example.com/image.png"]
+)
+def test_hydrate_preserves_explicit_image_detail(detail, url):
+    original = {"url": url, "detail": detail}
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": original}]}]
+    result = hydrate_multimodal_messages(messages)
+    assert result[0]["content"][0]["image_url"] == original
+    assert result[0]["content"][0]["image_url"] is not original

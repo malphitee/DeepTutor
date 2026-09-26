@@ -78,11 +78,8 @@ import {
   extractBase64FromDataUrl,
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
-import {
-  preparePendingAttachments,
-  selectAttachmentFiles,
-  type PendingAttachment,
-} from "@/features/chat/controllers/pending-attachments";
+import { selectAttachmentFiles } from "@/features/chat/controllers/pending-attachments";
+import { usePendingAttachments } from "@/features/chat/controllers/usePendingAttachments";
 import { readChatLaunchIntent } from "@/lib/chat-launch-intent";
 import { useAttachmentLimits } from "@/lib/attachment-limits";
 import {
@@ -363,8 +360,14 @@ export default function ChatWorkspace({
   const [userEnabledTools, setUserEnabledTools] = useState<string[] | null>(
     null,
   );
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const attachmentLimits = useAttachmentLimits();
+  const {
+    attachments,
+    setAttachments,
+    attachmentsPreparing,
+    prepareAndAppendAttachments,
+    waitForAttachments,
+  } = usePendingAttachments(attachmentLimits);
   const [dragging, setDragging] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<FilePreviewSource | null>(
@@ -1491,22 +1494,24 @@ export default function ChatWorkspace({
 
   const prepareAndAppendFiles = useCallback(
     async (files: File[]) => {
-      const { attachments: next, failures } =
-        await preparePendingAttachments(files);
+      const { failures } = await prepareAndAppendAttachments(files);
       if (failures.length) {
         const first = failures[0];
         showAttachmentError(
-          first.reason === "invalid_image"
-            ? t(
-                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
-                { name: first.name },
-              )
-            : t("Could not read file: {{name}}", { name: first.name }),
+          first.reason === "too_large"
+            ? t("File too large: {{name}}", { name: first.name })
+            : first.reason === "quota"
+              ? t("Too many files, skipped some")
+              : first.reason === "invalid_image"
+                ? t(
+                    "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                    { name: first.name },
+                  )
+                : t("Could not read file: {{name}}", { name: first.name }),
         );
       }
-      if (next.length) setAttachments((prev) => [...prev, ...next]);
     },
-    [showAttachmentError, t],
+    [prepareAndAppendAttachments, showAttachmentError, t],
   );
 
   const handlePaste = useCallback(
@@ -1526,7 +1531,7 @@ export default function ChatWorkspace({
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  }, [setAttachments]);
 
   const handlePreviewPendingAttachment = useCallback(
     (index: number) => {
@@ -1851,6 +1856,8 @@ export default function ChatWorkspace({
 
   const handleSend = useCallback(
     async (content: string) => {
+      const attachments = await waitForAttachments();
+      if (!attachments) return;
       // A turn paused on a question: what the user typed is their answer, not
       // a new message. Routing it here means the card is one way to answer,
       // not the only one — and a card that never rendered no longer strands
@@ -2003,7 +2010,8 @@ export default function ChatWorkspace({
     },
     [
       resourceReuse, state.knowledgeBases, state.resourceSelection, agentNameSet, setKBs, setPersonaSelection, setResourceSelection,
-      attachments,
+      waitForAttachments,
+      setAttachments,
       bookReferencesPayload,
       courseId,
       readingReferencesPayload,
@@ -2655,6 +2663,7 @@ export default function ChatWorkspace({
                 spaceMenuOpen={spaceMenuOpen}
                 hasMessages={hasMessages}
                 attachments={attachments}
+                attachmentsPreparing={attachmentsPreparing}
                 attachmentError={attachmentError}
                 activeCap={activeCap}
                 knowledgeBases={kbOptions}

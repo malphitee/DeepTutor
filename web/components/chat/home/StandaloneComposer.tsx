@@ -40,11 +40,8 @@ import {
   extractBase64FromDataUrl,
   readFileAsDataUrl,
 } from "@/lib/file-attachments";
-import {
-  preparePendingAttachments,
-  selectAttachmentFiles,
-  type PendingAttachment,
-} from "@/features/chat/controllers/pending-attachments";
+import { selectAttachmentFiles } from "@/features/chat/controllers/pending-attachments";
+import { usePendingAttachments } from "@/features/chat/controllers/usePendingAttachments";
 import {
   listKnowledgeBases,
   type KnowledgeBaseSummary,
@@ -232,8 +229,14 @@ function StandaloneComposerImpl({
   const dragCounter = useRef(0);
 
   // ── Composer local state ──────────────────────────────────────
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const attachmentLimits = useAttachmentLimits();
+  const {
+    attachments,
+    setAttachments,
+    attachmentsPreparing,
+    prepareAndAppendAttachments,
+    waitForAttachments,
+  } = usePendingAttachments(attachmentLimits);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const attachmentErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -460,22 +463,24 @@ function StandaloneComposerImpl({
 
   const prepareAndAppendFiles = useCallback(
     async (files: File[]) => {
-      const { attachments: next, failures } =
-        await preparePendingAttachments(files);
+      const { failures } = await prepareAndAppendAttachments(files);
       if (failures.length) {
         const first = failures[0];
         showAttachmentError(
-          first.reason === "invalid_image"
-            ? t(
-                "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
-                { name: first.name },
-              )
-            : t("Could not read file: {{name}}", { name: first.name }),
+          first.reason === "too_large"
+            ? t("File too large: {{name}}", { name: first.name })
+            : first.reason === "quota"
+              ? t("Too many files, skipped some")
+              : first.reason === "invalid_image"
+                ? t(
+                    "Could not read image: {{name}}. Please use a valid JPG, PNG, GIF, or WebP image.",
+                    { name: first.name },
+                  )
+                : t("Could not read file: {{name}}", { name: first.name }),
         );
       }
-      if (next.length) setAttachments((prev) => [...prev, ...next]);
     },
-    [showAttachmentError, t],
+    [prepareAndAppendAttachments, showAttachmentError, t],
   );
 
   const handleAddFiles = useCallback(
@@ -489,7 +494,7 @@ function StandaloneComposerImpl({
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  }, [setAttachments]);
 
   const handlePaste = useCallback(
     async (event: React.ClipboardEvent) => {
@@ -707,6 +712,8 @@ function StandaloneComposerImpl({
   const handleSend = useCallback(
     async (content: string) => {
       if (isStreaming && !awaitingUserReply) return;
+      const attachments = await waitForAttachments();
+      if (!attachments) return;
       const hasReferences =
         attachments.length > 0 ||
         selectedBookReferences.length > 0 ||
@@ -779,7 +786,8 @@ function StandaloneComposerImpl({
     },
     [
       resourceReuse, applyKnowledgeBases, agentNameSet,
-      attachments,
+      waitForAttachments,
+      setAttachments,
       awaitingUserReply,
       isStreaming,
       isQuizMode,
@@ -882,6 +890,7 @@ function StandaloneComposerImpl({
         hasMessages={hasMessages}
         contextBudget={contextBudget ?? null}
         attachments={attachments}
+        attachmentsPreparing={attachmentsPreparing}
         attachmentError={attachmentError}
         activeCap={activeCap}
         knowledgeBases={kbOptions}

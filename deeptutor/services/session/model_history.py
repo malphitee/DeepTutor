@@ -7,12 +7,16 @@ an older database without this metadata continues to use display history.
 
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
+import hashlib
 import json
+import logging
 from typing import Any
 
 MODEL_TURN_KEY = "model_turn"
 MODEL_TURN_VERSION = 1
+logger = logging.getLogger(__name__)
 _MESSAGE_KEYS = frozenset(
     {
         "role",
@@ -26,6 +30,159 @@ _MESSAGE_KEYS = frozenset(
         "_context_snapshot",
     }
 )
+
+
+def _inline_image(part: Any) -> tuple[str, str] | None:
+    """Read either provider's inline image without treating it as text."""
+    if not isinstance(part, dict):
+        return None
+    if part.get("type") == "image_url":
+        image_url = part.get("image_url") or {}
+        url = image_url.get("url", "") if isinstance(image_url, dict) else image_url
+        if isinstance(url, str) and url.startswith("data:image/") and ";base64," in url:
+            header, encoded = url.split(";base64,", 1)
+            return encoded, header[5:]
+    elif part.get("type") == "image":
+        source = part.get("source") or {}
+        if isinstance(source, dict) and source.get("type") == "base64":
+            encoded = source.get("data")
+            if isinstance(encoded, str):
+                return encoded, str(source.get("media_type") or "image/png")
+    return None
+
+
+def _image_fingerprint(encoded: str) -> str:
+    return hashlib.sha256(encoded.encode("ascii")).hexdigest()
+
+
+def attachments_missing_from_history(
+    messages: list[dict[str, Any]], attachments: list[Any]
+) -> list[Any]:
+    """Do not append historical images again after their original user turn.
+
+    Call after hydrating history so legacy inline images and current local
+    references compare using the same normalized model bytes. Newly uploaded
+    images with inline bytes remain explicit inputs, even if the user sends
+    the same picture again.
+    """
+    from deeptutor.services.llm.multimodal import resolve_image_for_model
+
+    seen = {
+        _image_fingerprint(image[0])
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if (image := _inline_image(part)) is not None
+    }
+    if not seen:
+        return attachments
+    selected = []
+    for attachment in attachments:
+        if getattr(attachment, "type", "") != "image" or getattr(attachment, "base64", ""):
+            selected.append(attachment)
+            continue
+        try:
+            resolved = resolve_image_for_model(url=getattr(attachment, "url", ""))
+        except ValueError:
+            resolved = None
+        if resolved is None or _image_fingerprint(resolved[0]) not in seen:
+            selected.append(attachment)
+    return selected
+
+
+async def archive_model_images(
+    messages: list[dict[str, Any]], *, session_id: str, attachments: list[Any]
+) -> list[dict[str, Any]]:
+    """Persist attachment references, never inline image bytes, in model turns.
+
+    Web inputs already have a scoped AttachmentStore URL. SDK/partner inputs
+    can arrive without one; persist those using the same scoped store before
+    retaining their model history. Resolution stays at the provider seam.
+    """
+    result = deepcopy(messages)
+    if not any(
+        _inline_image(part)
+        for message in result
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+    ):
+        return result
+
+    from deeptutor.services.llm.multimodal import resolve_image_for_model
+    from deeptutor.services.storage import get_attachment_store
+
+    references: dict[str, str] = {}
+    for attachment in attachments:
+        url = getattr(attachment, "url", "") or ""
+        if getattr(attachment, "type", "") != "image" or not url.startswith("/files/attachments/"):
+            continue
+        try:
+            resolved = resolve_image_for_model(url=url)
+        except ValueError:
+            continue
+        if resolved is not None:
+            references[_image_fingerprint(resolved[0])] = url
+
+    for message in result:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for index, part in enumerate(content):
+            image = _inline_image(part)
+            if image is None:
+                continue
+            encoded, mime = image
+            fingerprint = _image_fingerprint(encoded)
+            try:
+                url = references.get(fingerprint)
+                if url is None:
+                    extension = {"image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(
+                        mime, "png"
+                    )
+                    url = await get_attachment_store().put(
+                        session_id=session_id,
+                        attachment_id=f"model-{fingerprint[:24]}",
+                        filename=f"image.{extension}",
+                        data=base64.b64decode(encoded, validate=True),
+                        mime_type=mime,
+                    )
+                    references[fingerprint] = url
+                image_url = {"url": url}
+                if isinstance(part.get("image_url"), dict) and "detail" in part["image_url"]:
+                    image_url["detail"] = part["image_url"]["detail"]
+                content[index] = {"type": "image_url", "image_url": image_url}
+            except Exception:
+                # Do not let a failed optional history write inflate the DB
+                # with base64 or discard the completed answer. A persisted
+                # user attachment can still be re-injected on the next turn.
+                logger.warning("Could not retain model image reference", exc_info=True)
+                content[index] = {
+                    "type": "text",
+                    "text": "[Image unavailable in stored model history.]",
+                }
+    return result
+
+
+def model_messages_token_count(messages: list[dict[str, Any]]) -> int:
+    """Budget image blocks as images, not as millions of base64 text tokens."""
+    from .context_builder import count_tokens
+
+    image_count = 0
+    cleaned = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in {"image_url", "image"}:
+                    image_count += 1
+                else:
+                    parts.append(part)
+            message = {**message, "content": parts}
+        cleaned.append(message)
+    # Provider image accounting differs; reserve a bounded planning estimate
+    # per normalized image while retaining all text, tools and reasoning.
+    return count_tokens(json.dumps(cleaned, ensure_ascii=False)) + image_count * 1024
 
 
 def normalize_model_turn(value: Any) -> dict[str, Any] | None:

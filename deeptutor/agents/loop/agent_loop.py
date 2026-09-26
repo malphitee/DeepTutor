@@ -324,6 +324,7 @@ class AgentLoop:
                     messages.append({"role": "assistant", "content": outcome.final_text})
             finally:
                 from deeptutor.services.session.model_history import (
+                    archive_model_images,
                     complete_tool_results,
                     normalize_model_turn,
                 )
@@ -333,8 +334,10 @@ class AgentLoop:
                 self.context.runtime.model_turn = normalize_model_turn(
                     {
                         "version": 1,
-                        "messages": complete_tool_results(
-                            messages[self.pipeline._model_turn_start :]
+                        "messages": await archive_model_images(
+                            complete_tool_results(messages[self.pipeline._model_turn_start :]),
+                            session_id=self.context.session_id,
+                            attachments=self.context.attachments,
                         ),
                         "system": messages[0]["content"],
                         "tools": self._request_tools,

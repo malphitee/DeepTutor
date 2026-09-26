@@ -21,7 +21,7 @@ from .ask_user_trace import (
     extract_ask_user_clarification_blocks,
     extract_ask_user_clarifications,
 )
-from .model_history import history_groups, model_turn, replay_history
+from .model_history import history_groups, model_messages_token_count, model_turn, replay_history
 from .protocol import SessionStoreProtocol
 from .provider_response_state import normalize_provider_response_state
 
@@ -339,7 +339,7 @@ class ContextBuilder:
 
     def _model_tokens(self, messages: list[dict[str, Any]], summary: str = "") -> int:
         if any(model_turn(row) is not None for row in messages):
-            return count_tokens(json.dumps(replay_history(messages, summary), ensure_ascii=False))
+            return model_messages_token_count(replay_history(messages, summary))
         return count_tokens(build_history_text(self._build_history(summary, messages))) + sum(
             _provider_response_state_tokens(row) for row in messages
         )
@@ -489,6 +489,8 @@ class ContextBuilder:
             _chunks: list[str] = []
             replay_kwargs: dict[str, Any] = {}
             if replay_request is not None:
+                from deeptutor.services.llm.multimodal import hydrate_multimodal_messages
+
                 # Reuse the conversation's warm prefix; only the instruction
                 # is new. Tools are present for cache identity, never executed.
                 instruction = (
@@ -496,10 +498,21 @@ class ContextBuilder:
                     f"{target_tokens} tokens. Output only the summary; do not call tools."
                 )
                 replay_kwargs = {
-                    "messages": [
-                        *replay_request["messages"],
-                        {"role": "user", "content": instruction},
-                    ],
+                    "messages": hydrate_multimodal_messages(
+                        [
+                            *(
+                                {
+                                    key: value
+                                    for key, value in message.items()
+                                    if key != "_context_snapshot"
+                                }
+                                for message in replay_request["messages"]
+                            ),
+                            {"role": "user", "content": instruction},
+                        ],
+                        binding=agent.binding,
+                        model=agent.model,
+                    ),
                     "tools": replay_request.get("tools"),
                 }
             async for _c in agent.stream_llm(

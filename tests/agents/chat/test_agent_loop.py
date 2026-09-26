@@ -226,11 +226,44 @@ async def test_rejected_forced_choice_keeps_schemas_for_all_later_rounds(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_persisted_tool_turn_extends_request_prefix_after_resume(monkeypatch, tmp_path):
+@pytest.mark.parametrize("with_image", [False, True])
+async def test_persisted_tool_turn_extends_request_prefix_after_resume(
+    monkeypatch, tmp_path, with_image
+):
     """A new pipeline/database read must preserve seed, reasoning and tools."""
     from deeptutor.core.context import WorkspaceRuntimeContext
     from deeptutor.services.session.context_builder import ContextBuilder
     from deeptutor.services.session.sqlite_store import SQLiteSessionStore
+
+    attachments = []
+    if with_image:
+        import base64
+        from io import BytesIO
+
+        from PIL import Image
+
+        from deeptutor.services.storage import LocalDiskAttachmentStore
+
+        image = BytesIO()
+        Image.new("RGB", (20, 10), "white").save(image, format="PNG")
+        attachment_store = LocalDiskAttachmentStore(root=tmp_path / "attachments")
+        monkeypatch.setattr(
+            "deeptutor.services.storage.get_attachment_store", lambda: attachment_store
+        )
+        url = await attachment_store.put(
+            session_id="cache-session",
+            attachment_id="photo",
+            filename="photo.png",
+            data=image.getvalue(),
+        )
+        attachments = [
+            Attachment(
+                type="image",
+                url=url,
+                base64=base64.b64encode(image.getvalue()).decode(),
+                filename="photo.png",
+            )
+        ]
 
     client = _ScriptedChatClient(
         [
@@ -263,6 +296,7 @@ async def test_persisted_tool_turn_extends_request_prefix_after_resume(monkeypat
     first = UnifiedContext(
         session_id="cache-session",
         user_message="Question",
+        attachments=attachments,
         runtime=TurnRuntimeContext(
             workspace=WorkspaceRuntimeContext(logical_output_dir="outputs/turn-1"),
         ),
@@ -275,7 +309,11 @@ async def test_persisted_tool_turn_extends_request_prefix_after_resume(monkeypat
         "tool",
         "assistant",
     ]
-    assert record["messages"][-4] == {"role": "user", "content": "Question"}
+    if with_image:
+        assert record["messages"][-4]["content"][1]["image_url"]["url"] == url
+        assert "base64," not in json.dumps(record)
+    else:
+        assert record["messages"][-4] == {"role": "user", "content": "Question"}
     store = SQLiteSessionStore(db_path=tmp_path / "history.db")
     session = await store.create_session()
     sid = session["id"]
@@ -296,6 +334,7 @@ async def test_persisted_tool_turn_extends_request_prefix_after_resume(monkeypat
     second = UnifiedContext(
         session_id="cache-session",
         user_message="Follow-up",
+        attachments=[Attachment(type="image", url=url, filename="photo.png")] if with_image else [],
         runtime=TurnRuntimeContext(
             workspace=WorkspaceRuntimeContext(logical_output_dir="outputs/turn-2"),
             model_history=built.model_history,
@@ -3067,6 +3106,14 @@ def test_augment_tool_kwargs_injects_mastery_path_id() -> None:
 
 
 def test_augment_tool_kwargs_injects_geogebra_image() -> None:
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "white").save(image, format="PNG")
+    encoded = base64.b64encode(image.getvalue()).decode("ascii")
     pipeline = AgenticChatPipeline.__new__(AgenticChatPipeline)
     pipeline.language = "zh"
     context = UnifiedContext(
@@ -3074,7 +3121,7 @@ def test_augment_tool_kwargs_injects_geogebra_image() -> None:
         attachments=[
             Attachment(
                 type="image",
-                base64="REAL_IMG_BYTES",
+                base64=encoded,
                 filename="problem.png",
                 mime_type="image/png",
             ),
@@ -3088,8 +3135,50 @@ def test_augment_tool_kwargs_injects_geogebra_image() -> None:
         context,
     )
 
-    assert augmented["image_base64"] == "data:image/png;base64,REAL_IMG_BYTES"
+    assert augmented["image_base64"] == f"data:image/png;base64,{encoded}"
     assert augmented["language"] == "zh"
+
+
+@pytest.mark.asyncio
+async def test_geogebra_uses_bounded_url_only_history_image(tmp_path, monkeypatch) -> None:
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    from deeptutor.services.llm.multimodal import resolve_image_for_model
+    from deeptutor.services.storage import attachment_store
+
+    store = attachment_store.LocalDiskAttachmentStore(root=tmp_path)
+    monkeypatch.setattr("deeptutor.services.storage.get_attachment_store", lambda: store)
+    image = BytesIO()
+    Image.new("RGB", (5712, 4284), "white").save(image, format="PNG")
+    url = await store.put(
+        session_id="test",
+        attachment_id="image",
+        filename="problem.png",
+        data=image.getvalue(),
+        mime_type="image/png",
+    )
+    pipeline = AgenticChatPipeline.__new__(AgenticChatPipeline)
+    context = UnifiedContext(
+        user_message="continue", attachments=[Attachment(type="image", url=url)]
+    )
+    result = pipeline._augment_tool_kwargs(
+        "geogebra_analysis", {"image_base64": "HALLUCINATED"}, context
+    )
+    encoded, mime = resolve_image_for_model(url=url)
+    assert result["image_base64"] == f"data:{mime};base64,{encoded}"
+    with Image.open(BytesIO(base64.b64decode(encoded))) as normalized:
+        assert normalized.size == (2560, 1920)
+
+
+def test_geogebra_does_not_use_invented_image_arguments() -> None:
+    pipeline = AgenticChatPipeline.__new__(AgenticChatPipeline)
+    result = pipeline._augment_tool_kwargs(
+        "geogebra_analysis", {"image_base64": "HALLUCINATED"}, UnifiedContext()
+    )
+    assert "image_base64" not in result
 
 
 def test_build_llm_tool_schemas_kb_name_enum_matches_attached() -> None:

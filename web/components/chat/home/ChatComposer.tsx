@@ -231,6 +231,7 @@ export default memo(function ChatComposer({
   selectedMemoryFiles,
   selectedKnowledgeBases,
   isStreaming,
+  attachmentsPreparing = false,
   awaitingUserReply = false,
   isVisualizeMode,
   capabilityNeedsConfig,
@@ -347,6 +348,7 @@ export default memo(function ChatComposer({
   selectedMemoryFiles: SpaceMemoryFile[];
   selectedKnowledgeBases: string[];
   isStreaming: boolean;
+  attachmentsPreparing?: boolean;
   /** The live turn is paused on an ask_user card and needs an answer. */
   awaitingUserReply?: boolean;
   isVisualizeMode: boolean;
@@ -630,6 +632,7 @@ export default memo(function ChatComposer({
 
   const doSend = useCallback(
     (content: string) => {
+      if (attachmentsPreparing) return;
       onSend(content);
       void saveWorkspaceDraft({ text: "", attachments: [] }).catch(() => {});
       setHasContent(false);
@@ -639,7 +642,7 @@ export default memo(function ChatComposer({
       // so the user can keep typing, including after switching back to the tab.
       focusTextarea();
     },
-    [focusTextarea, onSend],
+    [attachmentsPreparing, focusTextarea, onSend],
   );
 
   const hasReferences =
@@ -664,7 +667,8 @@ export default memo(function ChatComposer({
   // there made the interactive card the ONLY way to answer — and left the
   // learner with no way out at all if the card failed to render.
   const streamingBlocksSend = isStreaming && !awaitingUserReply;
-  const canSend = hasIntent && !streamingBlocksSend && !isConfigBlocked;
+  const canSend =
+    hasIntent && !streamingBlocksSend && !isConfigBlocked && !attachmentsPreparing;
 
   // `blocked` only exists once there is intent: without it the button stays
   // `idle` so an empty composer doesn't present a live send affordance. That
@@ -672,7 +676,7 @@ export default memo(function ChatComposer({
   // the `blocked` state can stay clickable and surface the config card.
   const sendState: SendState = streamingBlocksSend
     ? "streaming"
-    : !hasIntent
+    : !hasIntent || attachmentsPreparing
       ? "idle"
       : isConfigBlocked
         ? "blocked"
@@ -796,9 +800,11 @@ export default memo(function ChatComposer({
   const sendLabel =
     sendState === "streaming"
       ? t("Stop generating")
-      : awaitingUserReply
-        ? t("Send answer")
-        : t("Send");
+      : attachmentsPreparing
+        ? t("Loading")
+        : awaitingUserReply
+          ? t("Send answer")
+          : t("Send");
   const sendTitle =
     sendState === "blocked"
       ? t("Confirm settings on the right to send.")
@@ -1012,6 +1018,7 @@ export default memo(function ChatComposer({
             textareaRef={textareaRef}
             isVisualizeMode={isVisualizeMode}
             isStreaming={isStreaming}
+            attachmentsPreparing={attachmentsPreparing}
             canSendEmpty={hasReferences}
             onSend={doSend}
             onInputChange={handleInputChange}
@@ -1315,7 +1322,11 @@ export default memo(function ChatComposer({
                   className={`group relative ml-1 inline-grid h-8 w-8 shrink-0 place-items-center rounded-full transition-[background-color,box-shadow,transform] duration-200 active:scale-95 ${SEND_STATE_CLASS[sendState]}`}
                   aria-label={sendLabel}
                   title={sendTitle}
+                  aria-busy={attachmentsPreparing}
                 >
+                  {attachmentsPreparing && sendState !== "streaming" && (
+                    <Loader2 size={16} className="col-start-1 row-start-1 animate-spin" />
+                  )}
                   {sendState === "streaming" && (
                     // Outside the fill, so "still working" reads at a glance
                     // and dims on hover to hand the control back as "stop".
@@ -1325,7 +1336,7 @@ export default memo(function ChatComposer({
                     size={16}
                     strokeWidth={2.5}
                     className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${
-                      sendState === "streaming"
+                      sendState === "streaming" || attachmentsPreparing
                         ? "scale-50 opacity-0"
                         : "scale-100 opacity-100"
                     }`}

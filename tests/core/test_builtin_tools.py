@@ -557,6 +557,15 @@ async def test_paper_search_tool_formats_papers(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_geogebra_analysis_tool_handles_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "white").save(image, format="PNG")
+    encoded = base64.b64encode(image.getvalue()).decode("ascii")
+
     class FakeVisionSolverAgent:
         def __init__(self, **kwargs: Any) -> None:
             self.kwargs = kwargs
@@ -589,7 +598,7 @@ async def test_geogebra_analysis_tool_handles_success(monkeypatch: pytest.Monkey
 
     result = await GeoGebraAnalysisTool().execute(
         question="analyze this",
-        image_base64="ZmFrZQ==",
+        image_base64=encoded,
         language="en",
     )
 

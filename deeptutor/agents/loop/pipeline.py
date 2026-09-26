@@ -558,9 +558,13 @@ class AgenticLoopPipeline:
         messages: list[dict[str, Any]],
         context: UnifiedContext,
     ) -> list[dict[str, Any]]:
+        from deeptutor.services.llm.multimodal import hydrate_multimodal_messages
+        from deeptutor.services.session.model_history import attachments_missing_from_history
+
+        messages = hydrate_multimodal_messages(messages, binding=self.binding, model=self.model)
         return prepare_multimodal_messages(
             messages,
-            context.attachments,
+            attachments_missing_from_history(messages, context.attachments),
             binding=self.binding,
             model=self.model,
         ).messages
@@ -1381,21 +1385,35 @@ class AgenticLoopPipeline:
             kwargs["conversation_history"] = list(context.conversation_history or [])
             kwargs["current_user_message"] = context.user_message or ""
         elif tool_name == "geogebra_analysis":
+            from deeptutor.services.llm.model_images import ModelImageError
+            from deeptutor.services.llm.multimodal import resolve_image_for_model
+
+            # The image is owned by the attachment pipeline, never a model-
+            # supplied argument. URL-only history/regeneration uses the same
+            # bounded cached image as the main chat call.
+            kwargs.pop("image_base64", None)
             first_image = next(
                 (
                     att
                     for att in (context.attachments or [])
-                    if getattr(att, "type", "") == "image" and getattr(att, "base64", "")
+                    if getattr(att, "type", "") == "image"
+                    and (getattr(att, "base64", "") or getattr(att, "url", ""))
                 ),
                 None,
             )
             if first_image is not None:
-                raw_b64 = first_image.base64
+                raw_b64 = first_image.base64 or ""
                 if raw_b64.startswith("data:"):
-                    kwargs["image_base64"] = raw_b64
-                else:
-                    mime = getattr(first_image, "mime_type", "") or "image/png"
-                    kwargs["image_base64"] = f"data:{mime};base64,{raw_b64}"
+                    raw_b64 = raw_b64.partition(",")[2]
+                try:
+                    resolved = resolve_image_for_model(url=first_image.url)
+                    if resolved is None and raw_b64:
+                        resolved = resolve_image_for_model(base64_data=raw_b64)
+                    if resolved:
+                        data, mime = resolved
+                        kwargs["image_base64"] = f"data:{mime};base64,{data}"
+                except ModelImageError:
+                    logger.warning("Skipping invalid GeoGebra image attachment")
             kwargs["language"] = context.language or "zh"
         for cap in self._active_loop_capabilities(context):
             kwargs = cap.augment_kwargs(tool_name, kwargs, context)

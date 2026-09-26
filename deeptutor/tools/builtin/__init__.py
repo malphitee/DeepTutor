@@ -520,8 +520,20 @@ class GeoGebraAnalysisTool(_PromptHintsMixin, BaseTool):
         # URI for the OpenAI image_url shape. The chat pipeline injects this
         # form already, but defensively normalize for any other caller (or a
         # hallucinated kwarg) so we don't silently fall through 4 empty stages.
-        if not image_base64.startswith("data:"):
-            image_base64 = f"data:image/png;base64,{image_base64}"
+        from deeptutor.services.llm.model_images import ModelImageError
+        from deeptutor.services.llm.multimodal import resolve_image_for_model
+
+        try:
+            encoded = (
+                image_base64.partition(",")[2] if image_base64.startswith("data:") else image_base64
+            )
+            resolved = resolve_image_for_model(base64_data=encoded)
+            if resolved is None:
+                raise ModelImageError("Missing image bytes.")
+            data, mime = resolved
+            image_base64 = f"data:{mime};base64,{data}"
+        except ModelImageError as exc:
+            return ToolResult(content=f"Cannot process the attached image: {exc}", success=False)
 
         llm_config = get_llm_config()
         agent = VisionSolverAgent(
