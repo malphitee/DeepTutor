@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}
-      DEEPTUTOR_HOME: ${{ runner.temp }}/deeptutor-isolation
+      DEEPTUTOR_HOME: ${{ github.workspace }}/.deeptutor-isolation
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
