@@ -17,7 +17,6 @@ from deeptutor.partners.channels.base import constructing_for
 from deeptutor.partners.channels.qq import QQChannel, QQConfig
 from deeptutor.partners.config import paths as partner_paths
 
-
 _PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/xusAAAAASUVORK5CYII="
 )
@@ -147,7 +146,102 @@ async def test_group_image_is_forwarded_with_group_routing(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_unavailable_image_reports_failure_instead_of_answering_without_it(monkeypatch) -> None:
+@pytest.mark.skipif(not qq_mod.QQ_AVAILABLE, reason="qq-botpy is not installed")
+async def test_group_quoted_image_from_raw_event_reaches_media_bus(tmp_path, monkeypatch) -> None:
+    """Exercise botpy's per-client parser, which normally drops msg_elements."""
+    from botpy.connection import ConnectionState
+
+    bus = MessageBus()
+    channel = QQChannel(QQConfig(allow_from=["*"]), bus)
+    image = _local_image(tmp_path)
+    download = AsyncMock(return_value=str(image))
+    monkeypatch.setattr(channel, "_download_attachment", download)
+    dispatched = []
+
+    async def fake_login(client, _token):
+        state = ConnectionState(
+            lambda event, message: dispatched.append((event, message)), client.api
+        )
+        client._connection = SimpleNamespace(parser=state.parsers)
+
+    monkeypatch.setattr(qq_mod.botpy.Client, "_bot_login", fake_login)
+    bot = qq_mod._make_bot_class(channel)()
+    await bot._bot_login(None)
+    quoted_image = {
+        "content_type": "image/png",
+        "url": _IMAGE_URL,
+        "size": len(_PNG_BYTES),
+    }
+    bot._connection.parser["group_at_message_create"](
+        {
+            "id": "gateway-event",
+            "d": {
+                "id": "group-quote-message",
+                "content": "@bot What is in this picture?",
+                "author": {"member_openid": "group-member"},
+                "group_openid": "qq-group",
+                "msg_elements": [{"message_type": 103, "attachments": [quoted_image]}],
+            },
+        }
+    )
+
+    assert len(dispatched) == 1
+    event, message = dispatched[0]
+    assert event == "group_at_message_create"
+    await channel._on_message(message, is_group=True)
+
+    inbound = bus.inbound.get_nowait()
+    assert inbound.chat_id == "qq-group"
+    assert inbound.sender_id == "group-member"
+    assert inbound.media == [str(image)]
+    download.assert_awaited_once()
+    assert download.await_args.args[0].url == _IMAGE_URL
+
+
+def test_group_nested_non_image_is_ignored_and_duplicate_image_is_not_added() -> None:
+    image = {"content_type": "image/png", "url": _IMAGE_URL}
+    payload = {
+        "d": {
+            "attachments": [image],
+            "msg_elements": [
+                {
+                    "message_type": 103,
+                    "attachments": [
+                        {"content_type": "audio/mpeg", "url": "https://cdn.example.test/a.mp3"},
+                        image,
+                    ],
+                    "msg_elements": [
+                        {
+                            "attachments": [
+                                {
+                                    "content_type": "text/plain",
+                                    "url": "https://cdn.example.test/a.txt",
+                                },
+                                {
+                                    "content_type": "image/jpeg",
+                                    "url": "https://cdn.example.test/b.jpg",
+                                },
+                            ]
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    enriched = qq_mod._group_payload_with_images(payload)
+
+    assert enriched["d"]["attachments"] == [
+        image,
+        {"content_type": "image/jpeg", "url": "https://cdn.example.test/b.jpg"},
+    ]
+    assert payload["d"]["attachments"] == [image]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_image_reports_failure_instead_of_answering_without_it(
+    monkeypatch,
+) -> None:
     bus = MessageBus()
     channel = QQChannel(QQConfig(allow_from=["*"]), bus)
     monkeypatch.setattr(channel, "_download_attachment", AsyncMock(return_value=None))
@@ -166,9 +260,7 @@ async def test_unavailable_image_reports_failure_instead_of_answering_without_it
 @pytest.mark.asyncio
 async def test_valid_png_downloads_to_partner_media_dir(tmp_path, monkeypatch) -> None:
     channel, media_dir = _download_channel(tmp_path, monkeypatch)
-    requests = _mock_image_response(
-        monkeypatch, lambda: httpx.Response(200, content=_PNG_BYTES)
-    )
+    requests = _mock_image_response(monkeypatch, lambda: httpx.Response(200, content=_PNG_BYTES))
     attachment = _image_attachment()
     attachment.url = _IMAGE_URL
 
@@ -185,9 +277,7 @@ async def test_valid_png_downloads_to_partner_media_dir(tmp_path, monkeypatch) -
 @pytest.mark.asyncio
 async def test_scheme_relative_qq_image_url_is_downloaded(tmp_path, monkeypatch) -> None:
     channel, _media_dir = _download_channel(tmp_path, monkeypatch)
-    requests = _mock_image_response(
-        monkeypatch, lambda: httpx.Response(200, content=_PNG_BYTES)
-    )
+    requests = _mock_image_response(monkeypatch, lambda: httpx.Response(200, content=_PNG_BYTES))
     attachment = _image_attachment()
     attachment.url = "//cdn.example.test/photo.png"
 
@@ -201,9 +291,7 @@ async def test_scheme_relative_qq_image_url_is_downloaded(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_declared_oversized_image_is_rejected_before_fetch(tmp_path, monkeypatch) -> None:
     channel, media_dir = _download_channel(tmp_path, monkeypatch)
-    requests = _mock_image_response(
-        monkeypatch, lambda: httpx.Response(200, content=_PNG_BYTES)
-    )
+    requests = _mock_image_response(monkeypatch, lambda: httpx.Response(200, content=_PNG_BYTES))
     attachment = _image_attachment()
     attachment.url = _IMAGE_URL
     attachment.size = _MAX_IMAGE_BYTES + 1
@@ -323,7 +411,13 @@ async def test_unsafe_url_is_rejected_without_fetch(tmp_path, monkeypatch, unsaf
         partner_network.socket,
         "getaddrinfo",
         lambda *_args, **_kwargs: [
-            (partner_network.socket.AF_INET, partner_network.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))
+            (
+                partner_network.socket.AF_INET,
+                partner_network.socket.SOCK_STREAM,
+                6,
+                "",
+                ("127.0.0.1", 0),
+            )
         ],
     )
     monkeypatch.setattr(
