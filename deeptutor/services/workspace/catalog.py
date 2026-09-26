@@ -43,6 +43,7 @@ class WorkspaceCatalogMixin:
         def _paths() -> Any: ...
         def _default_root(self) -> Path: ...
         def _deployment_root(self) -> Path | None: ...
+        def _assert_account_root(self, root: Path) -> None: ...
         def _assert_allowed_root(self, root: Path) -> None: ...
         def binding_by_id(self, workspace_id: str) -> WorkspaceBinding: ...
         def current_binding(self, *, ensure_output: bool = False) -> WorkspaceBinding: ...
@@ -56,10 +57,16 @@ class WorkspaceCatalogMixin:
     def _managed_root(self) -> Path:
         configured = self._catalog_metadata("root")
         if configured:
-            return Path(configured).expanduser().resolve()
-        if root := self._deployment_content_root():
-            return root / "workspaces"
-        return self._default_root().parent / "workspaces"
+            root = Path(configured).expanduser()
+        elif deployment := self._deployment_content_root():
+            root = deployment / "workspaces"
+        else:
+            root = self._default_root().parent / "workspaces"
+        # Older registries may contain a shared deployment root. Reject it
+        # before creating built-ins or treating it as an allowed content root;
+        # leave its registration and files intact for operator recovery.
+        self._assert_account_root(root)
+        return root.resolve()
 
     def _session_root(self) -> Path:
         # Retain access to previously registered session roots and artifacts.
@@ -151,6 +158,7 @@ class WorkspaceCatalogMixin:
             if workspace_id in rows:
                 continue
             root = self._managed_root() / workspace_id
+            self._assert_allowed_root(root)
             # Publish a built-in only after its initial files are ready.
             # Concurrent requests must not race the one-time skill import.
             with self._catalog_connection() as conn:

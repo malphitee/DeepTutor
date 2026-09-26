@@ -68,9 +68,15 @@ jobs:
         env:
           REF_DELETED: ${{ github.event.deleted }}
 
+  user-isolation:
+    needs: validate-release-tag
+    uses: ./.github/workflows/user-isolation.yml
+    permissions:
+      contents: read
+
   build-and-push:
     name: Build ${{ needs.validate-release-tag.outputs.channel }} (${{ matrix.arch }})
-    needs: validate-release-tag
+    needs: [validate-release-tag, user-isolation]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:

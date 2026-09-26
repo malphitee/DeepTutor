@@ -1,12 +1,14 @@
 version: "1"
+# Keep Pull App proposals review-only. Release syncs are merged on dedicated
+# branches after the fork's user-isolation checks pass; never reset fork refs.
 rules:
   - base: main
     upstream: HKUDS:main
-    mergeMethod: hardreset
-    mergeUnstable: true
+    mergeMethod: none
+    mergeUnstable: false
   - base: dev
     upstream: HKUDS:dev
-    mergeMethod: hardreset
-    mergeUnstable: true
+    mergeMethod: none
+    mergeUnstable: false
 label: ":arrow_heading_down: pull"
 conflictLabel: "merge-conflict"

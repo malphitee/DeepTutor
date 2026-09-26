@@ -103,10 +103,8 @@ class ContentWorkspaceService(WorkspaceCatalogMixin):
     def _allowed_roots(self) -> tuple[Path, ...]:
         user = get_current_user()
         if not user.is_admin:
-            # Configured roots are deployment-wide.  A regular account may use
-            # one only when it is a subdirectory of its own scoped root; its
-            # catalog trees (managed workspaces, session artifacts) are derived
-            # from the same scoped root, so they stay inside the boundary.
+            # Persisted catalog roots are validated against the account scope
+            # before they can participate in this narrower content allowlist.
             return (
                 self._default_root(),
                 self._managed_root().resolve(),
@@ -214,10 +212,22 @@ class ContentWorkspaceService(WorkspaceCatalogMixin):
                 return binding
         raise WorkspaceError("The workspace is no longer registered for this user.")
 
-    def _assert_allowed_root(self, root: Path) -> None:
+    def _assert_account_root(self, root: Path) -> None:
+        """Stored workspace locations cannot grant access outside an account."""
+
         user = get_current_user()
         if user.is_admin:
             return
+        self._assert_no_symlink_path(user.scope.root)
+        self._assert_no_symlink_path(root)
+        if not root.resolve().is_relative_to(user.scope.root.resolve()):
+            raise WorkspaceError("This folder is outside the current user's workspace scope.")
+
+    def _assert_allowed_root(self, root: Path) -> None:
+        if get_current_user().is_admin:
+            return
+        self._assert_account_root(root)
+        root = root.resolve()
         for allowed in self._allowed_roots():
             try:
                 root.relative_to(allowed)

@@ -33,6 +33,12 @@ allowlist (see `CONTAINERIZATION.md`).
 
 ## Development and Delivery Workflow
 
+Official release synchronization uses the separate, user-approved workflow in
+`docs-for-user/upstream-sync.md`: integrate a pinned upstream release in an
+isolated `sync/upstream-vX.Y.Z` branch, confirm conflict decisions with the user,
+run the isolation gate and complete CI, then open a PR to `dev`. Do not push a
+release sync directly to `dev` or merge its PR without explicit approval.
+
 All ordinary fixes and development work target the `dev` branch. Start from
 the latest remote `dev`, preserve unrelated working-tree changes, implement the
 smallest scoped fix, and run relevant local tests before delivery. Once tests

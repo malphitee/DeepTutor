@@ -74,7 +74,39 @@ def test_publication_events_are_guarded(publication: str) -> None:
         "github.event_name == 'push' && !github.event.deleted && "
         "(github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))"
     )
-    assert document["jobs"][publish_job_name]["needs"] == "validate-release-tag"
+    assert set(document["jobs"][publish_job_name]["needs"]) == {
+        "validate-release-tag",
+        "user-isolation",
+    }
+
+
+def test_image_publication_requires_the_same_isolation_gate_as_pull_requests() -> None:
+    document, _ = _workflow("docker")
+    gate = document["jobs"]["user-isolation"]
+    assert gate["needs"] == "validate-release-tag"
+    assert gate["uses"] == "./.github/workflows/user-isolation.yml"
+    assert "continue-on-error" not in gate
+
+    path = REPOSITORY_ROOT / ".github/workflows/user-isolation.yml"
+    isolation = yaml.safe_load(path.read_text(encoding="utf-8"))
+    triggers = isolation[True]
+    assert "workflow_call" in triggers
+    assert set(triggers["pull_request"]["branches"]) == {"main", "dev"}
+    assert "paths" not in triggers["pull_request"]
+    assert "paths-ignore" not in triggers["pull_request"]
+    test_steps = isolation["jobs"]["isolation"]["steps"]
+    command = "\n".join(step.get("run", "") for step in test_steps)
+    assert "tests/multi_user" in command
+    assert "tests/services/workspace" in command
+    assert "tests/app/test_turn_scope_ownership.py" in command
+
+
+def test_upstream_pull_app_cannot_reset_or_automatically_merge_fork_branches() -> None:
+    config = yaml.safe_load((REPOSITORY_ROOT / ".github/pull.yml").read_text())
+    assert config["rules"]
+    for rule in config["rules"]:
+        assert rule["mergeMethod"] == "none"
+        assert rule["mergeUnstable"] is False
 
 
 @pytest.mark.parametrize(
@@ -206,14 +238,8 @@ def test_docker_routes_dev_to_cnb_and_releases_to_both_registries():
     assert logins["ghcr.io"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
     assert logins["docker.cnb.cool"]["username"] == "cnb"
     assert logins["docker.cnb.cool"]["password"] == "${{ secrets.CNB_TOKEN }}"
-    ghcr_login = next(
-        step
-        for step in steps
-        if step.get("with", {}).get("registry") == "ghcr.io"
-    )
-    assert ghcr_login["if"] == (
-        "needs.validate-release-tag.outputs.channel == 'production'"
-    )
+    ghcr_login = next(step for step in steps if step.get("with", {}).get("registry") == "ghcr.io")
+    assert ghcr_login["if"] == ("needs.validate-release-tag.outputs.channel == 'production'")
 
     metadata = next(step["with"] for step in steps if step.get("id") == "meta")
     assert metadata["images"].splitlines() == [
@@ -317,9 +343,7 @@ def test_registry_cache_is_shared_across_dev_and_release_builds():
             writers[(channel, arch)] = export["ref"]
 
             imports = cache_entries(builder["cache-from"], arch, channel)
-            registry_sources = {
-                entry["ref"] for entry in imports if entry["type"] == "registry"
-            }
+            registry_sources = {entry["ref"] for entry in imports if entry["type"] == "registry"}
             assert registry_sources == {
                 f"{image}:buildcache-test-{arch}",
                 f"{image}:buildcache-production-{arch}",
@@ -360,11 +384,7 @@ def _publication_fixture(tmp_path: Path, monkeypatch):
         artifact = directory / f"image-digests-{arch}"
         artifact.mkdir(parents=True)
         (artifact / f"{arch}.digest").write_text(digest + "\n")
-    tags = [
-        f"{image}:{tag}"
-        for image in images
-        for tag in ("dev", "dev-0123456789ab", "latest")
-    ]
+    tags = [f"{image}:{tag}" for image in images for tag in ("dev", "dev-0123456789ab", "latest")]
     monkeypatch.setenv("GHCR_IMAGE", ghcr_image)
     monkeypatch.setenv("CNB_IMAGE", images[0])
     monkeypatch.setenv("DIGEST_DIR", str(directory))
