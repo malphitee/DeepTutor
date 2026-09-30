@@ -159,7 +159,7 @@ interface StandaloneComposerProps {
   inputPlaceholder?: string;
   /** A line Tab accepts while the composer is empty. See ComposerInput. */
   inputPlaceholderCompletion?: string;
-  /** Context shown inside the composer above the text field. */
+  /** Context shown inside the box above the text. See ChatComposer. */
   inputHeader?: React.ReactNode;
   /**
    * Capability chip contents. Defaults to a locked "Chat" entry — pass a
@@ -188,6 +188,15 @@ interface StandaloneComposerProps {
    */
   personaSelection?: string;
   onPersonaSelectionChange?: (persona: string) => void;
+  /**
+   * Which of the workspace's skills and MCP servers this conversation narrows
+   * itself to, and what there is to narrow. Session-level like the persona
+   * above: pass the trio and the "+" menu grows the Skills and MCP entries,
+   * omit it and the conversation keeps inheriting its workspace untouched.
+   * `ChatComposer` needs both halves — it hides an entry whose catalog is
+   * empty — which is why a surface that passed neither showed no picker at all
+   * while the chat page showed one for the same account (#1534).
+   */
   resourceCatalog?: ComposerResourceCatalog;
   resourceSelection?: ResourceSelection;
   onResourceSelectionChange?: (selection: ResourceSelection) => void;

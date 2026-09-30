@@ -398,8 +398,12 @@ test.describe("Independent settings", () => {
         protectedRequests.push(request.url());
     });
     await page.goto("/settings/attachments", { waitUntil: "domcontentloaded" });
+    // A known page the account may not open explains the denial instead of
+    // pretending the page does not exist.
     await expect(
-      page.getByRole("heading", { name: "This settings page is unavailable." }),
+      page.getByRole("heading", {
+        name: "You do not have permission to access this settings page.",
+      }),
     ).toBeVisible();
     expect(protectedRequests).toEqual([]);
     await nav(page)

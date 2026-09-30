@@ -197,10 +197,7 @@ def main() -> None:
     destinations = ", ".join(images)
     print(f"Verified linux/amd64 and linux/arm64 in {destinations}: {digest}")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-        summary.write(
-            f"Publication targets verified at `{digest}` "
-            "(linux/amd64, linux/arm64).\n\n"
-        )
+        summary.write(f"Publication targets verified at `{digest}` (linux/amd64, linux/arm64).\n\n")
         summary.writelines(f"- `{tag}`\n" for tag in tags)
 
 

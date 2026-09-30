@@ -147,9 +147,16 @@ class _FakeStartTurnRecorder:
 class _ValidatingStartTurnRecorder(_FakeStartTurnRecorder):
     """Mirror ``start_turn``'s strict request validation before recording."""
 
-    async def __call__(self, payload: dict[str, Any]) -> tuple[dict, dict]:
+    async def __call__(
+        self,
+        payload: dict[str, Any],
+        *,
+        replace_assistant_message_id: int | str | None = None,
+    ) -> tuple[dict, dict]:
         validated = TurnRequest.model_validate(payload).to_payload()
-        return await super().__call__(validated)
+        return await super().__call__(
+            validated, replace_assistant_message_id=replace_assistant_message_id
+        )
 
 
 def _seed_session(
@@ -220,7 +227,7 @@ class TestRegenerateLastTurn:
             ],
         )
         runtime = TurnRuntimeManager(store=store)
-        recorder = _ValidatingStartTurnRecorder()
+        recorder = _ValidatingStartTurnRecorder(store)
 
         with patch.object(runtime, "start_turn", new=recorder):
             asyncio.run(runtime.regenerate_last_turn(sid))
@@ -232,6 +239,7 @@ class TestRegenerateLastTurn:
                 "url": "/files/attachments/session/abc123/photo.jpg",
                 "base64": "",
                 "mime_type": "image/jpeg",
+                "id": "f1f7bd49bd8d",
             }
         ]
 

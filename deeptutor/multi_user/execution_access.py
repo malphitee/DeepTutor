@@ -94,8 +94,7 @@ def assert_sandbox_execution_allowed() -> None:
     if is_partner_user_id(user.id):
         return
     raise PermissionError(
-        "This account cannot run code. Ask an administrator to use an isolated "
-        "execution service."
+        "This account cannot run code. Ask an administrator to use an isolated execution service."
     )
 
 

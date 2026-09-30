@@ -170,6 +170,46 @@ def split_tool_call_id(tool_call_id: Any) -> tuple[str, str | None]:
     return "call_0", None
 
 
+def _response_format_to_text(value: Any) -> dict[str, Any] | None:
+    """Translate a Chat Completions response format into ``text.format``.
+
+    ``response_format`` is a Chat Completions parameter.  The Responses API
+    names the equivalent parameter ``text.format``; leaving the former in
+    the kwargs makes the OpenAI SDK reject the call before it reaches a
+    compatible gateway.
+    """
+    if isinstance(value, type):
+        schema_builder = getattr(value, "model_json_schema", None)
+        if callable(schema_builder):
+            return {
+                "format": {
+                    "type": "json_schema",
+                    "name": getattr(value, "__name__", "response"),
+                    "strict": True,
+                    "schema": schema_builder(),
+                }
+            }
+        return None
+
+    if not isinstance(value, Mapping):
+        return None
+
+    if isinstance(value.get("format"), Mapping):
+        # Already in Responses shape; do not nest ``format`` twice.
+        return {"format": dict(value["format"])}
+
+    response_type = value.get("type")
+    if response_type == "json_schema" and isinstance(value.get("json_schema"), Mapping):
+        schema = dict(value["json_schema"])
+        schema["type"] = "json_schema"
+        return {"format": schema}
+
+    if response_type in {"json_object", "json_schema", "text"}:
+        return {"format": dict(value)}
+
+    return None
+
+
 def adapt_chat_kwargs_to_responses(extra_kwargs: Mapping[str, Any]) -> dict[str, Any]:
     """Translate Chat Completions kwargs to Responses API equivalents.
 
@@ -178,17 +218,25 @@ def adapt_chat_kwargs_to_responses(extra_kwargs: Mapping[str, Any]) -> dict[str,
     or ``max_tokens`` for older chat models. The Responses API does not accept
     either name and uses ``max_output_tokens`` instead, so the OpenAI SDK raises
     ``TypeError`` from ``responses.create`` before any HTTP request leaves the
-    client. See DeepTutor#437.
+    client. ``response_format`` likewise becomes ``text.format``.
+
+    See DeepTutor#437.
 
     Drops keys with ``None`` values to match the existing merge filter, and
-    only applies the alias when the caller did not already set the Responses
+    only applies aliases when the caller did not already set the Responses
     name explicitly.
     """
     result = {
         key: value
         for key, value in extra_kwargs.items()
-        if value is not None and key not in _CHAT_TOKEN_LIMIT_ALIASES
+        if value is not None and key not in (*_CHAT_TOKEN_LIMIT_ALIASES, "response_format")
     }
+    response_format = extra_kwargs.get("response_format")
+    if response_format is not None and "text" not in result:
+        text_config = _response_format_to_text(response_format)
+        if text_config is not None:
+            result["text"] = text_config
+
     if "max_output_tokens" in result:
         return result
 

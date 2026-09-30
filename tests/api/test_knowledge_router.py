@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from starlette.routing import Match
 
 from deeptutor.api.routers.auth import _learning_surface_for_path
 from deeptutor.multi_user.context import (
@@ -27,7 +26,7 @@ from deeptutor.services.rag.pipelines.ima.client import (
 import deeptutor.services.rag.pipelines.ima.config as ima_config_module
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Depends, FastAPI, HTTPException, Request
     from fastapi.testclient import TestClient
 except Exception:  # pragma: no cover - optional dependency in lightweight envs
     FastAPI = None
@@ -92,11 +91,19 @@ def _build_app() -> FastAPI:
 def test_learner_surface_uses_actual_kb_route_template(
     path: str, route_path: str, surface: str
 ) -> None:
-    app = _build_app()
-    scope = {"type": "http", "method": "GET", "path": path, "root_path": ""}
-    matched = next(route for route in app.router.routes if route.matches(scope)[0] is Match.FULL)
-    assert matched.path == route_path
-    assert _learning_surface_for_path(path, "GET", route_path=matched.path) == surface
+    # Resolve the route through a real request: newer FastAPI releases keep
+    # included routers nested and report the router-relative template.
+    resolved: list[str] = []
+
+    def capture(request: Request) -> None:
+        resolved.append(request.scope["route"].path)
+        raise HTTPException(status_code=418)
+
+    app = FastAPI(dependencies=[Depends(capture)])
+    app.include_router(router, prefix="/api")
+    assert TestClient(app).get(path).status_code == 418
+    assert route_path.endswith(resolved[0])
+    assert _learning_surface_for_path(path, "GET", route_path=resolved[0]) == surface
 
 
 def test_knowledge_source_error_translation_is_consistent_and_sanitized() -> None:

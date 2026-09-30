@@ -11,7 +11,6 @@ import sys
 
 import yaml
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -41,9 +40,7 @@ def test_release_validator_uses_the_tag_without_reading_source_version(tmp_path:
     )
 
     assert result.returncode == 0, result.stderr
-    assert output.read_text() == (
-        "image_tag=9.8.7\nis_stable=true\nchannel=production\n"
-    )
+    assert output.read_text() == ("image_tag=9.8.7\nis_stable=true\nchannel=production\n")
 
 
 def test_release_workflow_injects_validated_tag_into_the_docker_build() -> None:

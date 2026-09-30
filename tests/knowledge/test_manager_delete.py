@@ -43,9 +43,7 @@ def test_delete_knowledge_base_rejects_symlink_directory(tmp_path: Path) -> None
     marker.write_text("private", encoding="utf-8")
     manager = KnowledgeBaseManager(base_dir=str(tmp_path))
     (manager.base_dir / "linked-tree").symlink_to(outside, target_is_directory=True)
-    manager.config.setdefault("knowledge_bases", {})["linked-tree"] = {
-        "path": "linked-tree"
-    }
+    manager.config.setdefault("knowledge_bases", {})["linked-tree"] = {"path": "linked-tree"}
     manager._save_config()
 
     with pytest.raises(ValueError, match="symbolic link"):

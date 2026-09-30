@@ -68,9 +68,7 @@ def test_admin_skip_grant_check(mu_isolated_root, as_user):
         assert_skill_allowed("anything")
 
 
-def test_assigned_skills_follow_admin_system_workspace_move(
-    mu_isolated_root, as_user, make_user
-):
+def test_assigned_skills_follow_admin_system_workspace_move(mu_isolated_root, as_user, make_user):
     from deeptutor.multi_user.paths import user_context
     from deeptutor.services.skill.service import get_admin_skill_service, get_skill_service
     from deeptutor.services.workspace import ContentWorkspaceService

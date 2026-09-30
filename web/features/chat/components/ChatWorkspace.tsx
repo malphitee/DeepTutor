@@ -25,6 +25,7 @@ import {
   useState,
 } from "react";
 import { useChatRouteSession } from "@/features/chat/controllers/useChatRouteSession";
+import { waitForReplyLanguageSave } from "@/features/chat/controllers/reply-language-save";
 
 import {
   GraduationCap,
@@ -53,7 +54,7 @@ import { buildSessionActivity } from "@/components/chat/home/SessionActivityPane
 import Tooltip from "@/shared/ui/Tooltip";
 import SessionViewerPanel, {
   type SessionViewerPanelHandle,
-} from "@/components/chat/home/SessionViewerPanel";
+} from "@/components/chat/home/LazySessionViewerPanel";
 import {
   QuizFollowupProvider,
   useQuizFollowupController,
@@ -72,11 +73,11 @@ import {
 import { useAppShell } from "@/context/AppShellContext";
 import { readStoredResponseLanguage } from "@/context/app-shell-storage";
 import { RESPONSE_LANGUAGE_OPTIONS } from "@/features/settings/store";
-import { waitForReplyLanguageSave } from "@/features/chat/controllers/reply-language-save";
 
 import { WATCHING_ASK_EVENT } from "@/components/watching/WatchingPane";
 import type { FilePreviewSource } from "@/components/chat/preview/previewerFor";
 import type { LLMSelection, StreamEvent } from "@/features/chat/model/protocol";
+import { selectAttachmentProcessing } from "@/features/chat/selectors/attachment-processing";
 import {
   extractBase64FromDataUrl,
   readFileAsDataUrl,
@@ -302,7 +303,9 @@ export default function ChatWorkspace({
     replyLanguageSaveRef.current = { key, pending };
     setReplyLanguageSavingKey(key);
     void pending
-      .catch((error: unknown) => notify(error instanceof Error ? error.message : t("Action failed")))
+      .catch((error: unknown) => {
+        notify(error instanceof Error ? error.message : t("Action failed"));
+      })
       .finally(() => {
         if (replyLanguageSaveRef.current?.pending === pending) {
           replyLanguageSaveRef.current = null;
@@ -773,6 +776,10 @@ export default function ChatWorkspace({
   // "done" while nothing visibly changes.
   useSetupSync(state.messages);
   const hasMessages = state.messages.length > 0;
+  const attachmentProcessing = useMemo(
+    () => selectAttachmentProcessing(state.messages, state.isStreaming),
+    [state.isStreaming, state.messages],
+  );
   // Time-of-day greeting: seeded once on mount from the user's local clock so
   // the heading stays stable while they're on the page. State (not useMemo)
   // because the random pick would otherwise mismatch SSR ↔ client hydration.
@@ -1878,6 +1885,8 @@ export default function ChatWorkspace({
 
   const handleSend = useCallback(
     async (content: string) => {
+      // An existing session saves its selector before the next turn starts.
+      // The composer may be used immediately after changing the dropdown.
       if (!(await waitForReplyLanguageSave(
         replyLanguageSaveRef.current?.key === state.sessionKey
           ? replyLanguageSaveRef.current.pending
@@ -2040,7 +2049,6 @@ export default function ChatWorkspace({
     [
       resourceReuse, state.knowledgeBases, state.resourceSelection, agentNameSet, setKBs, setPersonaSelection, setResourceSelection,
       waitForAttachments,
-      state.sessionKey,
       prefillInputRef,
       setAttachments,
       bookReferencesPayload,
@@ -2069,6 +2077,7 @@ export default function ChatWorkspace({
       sendMessage,
       shouldAutoScrollRef,
       state.isStreaming,
+      state.sessionKey,
       subagentBudget,
       selectedPartnerGroup,
       selectedPartner,
@@ -2174,6 +2183,10 @@ export default function ChatWorkspace({
   const handleRegenerateMessage = useCallback(() => {
     regenerateLastMessage();
   }, [regenerateLastMessage]);
+
+  const handleResendMessage = useCallback(() => {
+    resendLastMessage();
+  }, [resendLastMessage]);
 
   const handleToggleKB = useCallback(
     (name: string) => {
@@ -2606,7 +2619,7 @@ export default function ChatWorkspace({
                         onCopyAssistantMessage={copyAssistantMessage}
                         onRegenerateMessage={handleRegenerateMessage}
                         canResendLastTurn={state.lastTurnFailed}
-                        onResendLastTurn={() => resendLastMessage()}
+                        onResendLastTurn={handleResendMessage}
                         onConfirmOutline={handleConfirmOutline}
                         onPreviewAttachment={handlePreviewMessageAttachment}
                         onOpenConsultation={(events) => {
@@ -2698,6 +2711,7 @@ export default function ChatWorkspace({
                 attachments={attachments}
                 attachmentsPreparing={attachmentsPreparing}
                 attachmentError={attachmentError}
+                attachmentProcessing={attachmentProcessing}
                 activeCap={activeCap}
                 knowledgeBases={kbOptions}
                 connectedAgents={agentOptions}
@@ -2755,6 +2769,8 @@ export default function ChatWorkspace({
                 onClearPersona={handleClearPersona}
                 personaSelection={state.personaSelection}
                 onPersonaSelectionChange={setPersonaSelection}
+                personaSelectorOpen={personaSelectorOpen}
+                onPersonaSelectorOpenChange={setPersonaSelectorOpen}
                 replyLanguageOverride={state.replyLanguageOverride}
                 replyLanguageOptions={RESPONSE_LANGUAGE_OPTIONS}
                 replyLanguageDefaultLabel={RESPONSE_LANGUAGE_OPTIONS.find(
@@ -2762,8 +2778,6 @@ export default function ChatWorkspace({
                 )?.label ?? "English"}
                 replyLanguageDisabled={replyLanguageSavingKey === state.sessionKey || state.isStreaming}
                 onReplyLanguageChange={handleReplyLanguageChange}
-                personaSelectorOpen={personaSelectorOpen}
-                onPersonaSelectorOpenChange={setPersonaSelectorOpen}
                 resourceCatalog={resourceCatalog}
                 resourceSelection={state.resourceSelection}
                 onResourceSelectionChange={setResourceSelection}
@@ -2965,9 +2979,9 @@ function SubagentTabWatcher({
 /**
  * Header action button that auto-collapses to icon-only when the chat
  * column gets squeezed (Viewer panel open, narrow viewport, etc.). The
- * label stays as the button's `title` so hovering an icon still reveals
- * what it does. Optional `active` flag paints the button with a primary
- * tint, used by the panel-toggle buttons to surface their on/off state.
+ * The shared tooltip keeps the full hint available on pointer, keyboard and
+ * touch. Optional `active` paints the button with a primary tint, used by the
+ * panel-toggle buttons to surface their on/off state.
  */
 // Claude-style icon-only header action: bare 16px glyph, function revealed
 // by an instant tooltip; active state gets a primary tint.

@@ -455,3 +455,28 @@ def test_set_preset_checks_expected_user_id(mu_isolated_root, seed_user) -> None
     assert set_preset("student-standard", "learner", expected_user_id="different") is False
     _username, unchanged = get_user_by_id(record["id"])
     assert unchanged["preset"] == "standard"
+
+
+@pytest.mark.parametrize(
+    ("path", "route_path", "expected"),
+    [
+        # FastAPI >= 0.142 resolves the included router's own template.
+        ("/api/knowledge-bases", "/knowledge-bases", "reading"),
+        ("/api/knowledge-bases/kb1/files", "/knowledge-bases/{kb_name}/files", "reading"),
+        (
+            "/api/knowledge-bases/kb1/files/a/b.pdf",
+            "/knowledge-bases/{kb_name}/files/{filename:path}",
+            "reading",
+        ),
+        ("/api/knowledge-bases/kb1/config", "/knowledge-bases/{kb_name}/config", ""),
+        ("/api/knowledge-bases/health", "/knowledge-bases/health", ""),
+        # A template suffix only counts when the whole request path matches.
+        ("/api/knowledge-bases/kb1/extra/files", "/{kb_name}/files", ""),
+        ("/api/knowledge-bases/kb1/files", "files", ""),
+        ("/api/knowledge-bases/kb1/files", "", ""),
+    ],
+)
+def test_learner_kb_get_allowlist_accepts_router_relative_templates(
+    path: str, route_path: str, expected: str
+) -> None:
+    assert _learning_surface_for_path(path, "GET", route_path=route_path) == expected

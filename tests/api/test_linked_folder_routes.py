@@ -42,6 +42,8 @@ class _FolderManager:
             }
         }
         self.config_file = base_dir / "kb_config.json"
+        # Sync re-validates the linked path, which must exist as a directory.
+        (base_dir / "notes").mkdir(exist_ok=True)
         self.folder = {
             "id": "folder-1",
             "path": str(base_dir / "notes"),
@@ -59,6 +61,9 @@ class _FolderManager:
         }
 
     def _load_config(self) -> dict:
+        return self.config
+
+    def reload_config(self) -> dict:
         return self.config
 
     def list_knowledge_bases(self) -> list[str]:
@@ -232,7 +237,7 @@ def test_completed_folder_task_records_source_paths(
     _patch_manager(monkeypatch, manager)
     source_root = tmp_path / "notes"
     source_path = source_root / "nested" / "note.md"
-    source_path.parent.mkdir(parents=True)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text("note", encoding="utf-8")
     staged_path = tmp_path / "kb" / "raw" / "nested" / "note.md"
 
@@ -279,7 +284,7 @@ def test_empty_completed_folder_task_advances_sync_state(
     manager = _FolderManager(tmp_path)
     _patch_manager(monkeypatch, manager)
     source_path = tmp_path / "notes" / "note.md"
-    source_path.parent.mkdir(parents=True)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text("note", encoding="utf-8")
 
     class _EmptyAdder:

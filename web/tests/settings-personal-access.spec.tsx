@@ -66,7 +66,8 @@ it("keeps denied settings in sync when the public shell language resolves later"
   });
   mount();
   await screen.findByText("These settings are managed by your administrator.");
-  expect(settings.settingsErrorStatus).toBe(403);
+  // ``settings`` is captured in a passive effect that may land after the DOM.
+  await waitFor(() => expect(settings.settingsErrorStatus).toBe(403));
   expect(screen.queryByText(/Verify the backend is running/)).not.toBeInTheDocument();
 
   await act(async () => { finishBootstrap(reply(ui)); });
@@ -85,6 +86,7 @@ it("retains browser preferences after 403 and clears the permission state on ret
   mocks.fetch.mockResolvedValue(reply({ detail: "Forbidden" }, 403));
   mount();
   await screen.findByRole("alert");
+  await waitFor(() => expect(settings.settingsErrorStatus).toBe(403));
   expect(settings.language).toBe("zh");
   expect(settings.responseLanguage).toBe("zh");
 
