@@ -29,7 +29,7 @@ from .book_permission import (
     public_permission_dict,
 )
 from .learner_profile import normalize_profile
-from .models import AccountPreset, Role, normalize_role
+from .models import VALID_ROLES, AccountPreset, Role, normalize_role
 from .paths import PROJECT_ROOT, SYSTEM_ROOT, migrate_legacy_multi_user_tree
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ def _canonical_record(
     # Only absent fields receive legacy defaults. Invalid explicit roles/presets
     # fail closed instead of silently changing account privileges.
     role = value.get("role", default_role)
-    if not isinstance(role, str) or role not in {"admin", "user"}:
+    if not isinstance(role, str) or role not in VALID_ROLES:
         raise IdentityStoreError("Invalid user role")
     preset = value.get("preset", "standard")
     if not isinstance(preset, str) or preset not in {"standard", "learner", "custom"}:
@@ -296,7 +296,7 @@ def _new_user_record(
 ) -> dict[str, Any]:
     if not isinstance(hashed_password, str) or not hashed_password:
         raise ValueError("A password hash is required")
-    if role not in {"admin", "user"} or preset not in {"standard", "learner", "custom"}:
+    if role not in VALID_ROLES or preset not in {"standard", "learner", "custom"}:
         raise ValueError("Invalid account role or preset")
     return {
         "id": new_user_id(),
@@ -434,7 +434,7 @@ def set_learner_profile(username: str, profile: dict[str, Any] | None) -> dict[s
         record = users.get(username)
         if (
             record is None
-            or str(record.get("role") or "user") != "user"
+            or str(record.get("role") or "user") == "admin"
             or str(record.get("preset") or "standard") != "learner"
         ):
             return None
@@ -601,8 +601,8 @@ def delete_avatar_file(user_id: str) -> None:
 
 
 def set_role(username: str, role: Role) -> bool:
-    if role not in {"admin", "user"}:
-        raise ValueError("role must be 'admin' or 'user'")
+    if role not in VALID_ROLES:
+        raise ValueError(f"role must be one of {sorted(VALID_ROLES)}")
     with auth_store_transaction():
         users = load_users()
         if username not in users:

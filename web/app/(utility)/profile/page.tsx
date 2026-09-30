@@ -25,6 +25,7 @@ import {
 import { parseAvatarMarker } from "@/lib/avatar";
 import { formatDate, type Language } from "@/lib/datetime";
 import { PasswordChangeCard } from "@/components/profile/PasswordChangeCard";
+import { accountRoleLabelKey } from "@/lib/account-role";
 
 const AVATAR_OUTPUT_SIZE = 256;
 // Decoding a huge photo just to throw away most pixels wastes memory; the
@@ -263,7 +264,7 @@ export default function ProfilePage() {
                       }`}
                     >
                       {isAdmin && <ShieldCheck size={11} strokeWidth={2} />}
-                      {isAdmin ? t("Administrator") : t("User")}
+                      {isAdmin ? t("Administrator") : t(accountRoleLabelKey(profile.role))}
                     </span>
                   </div>
                   {joined && (

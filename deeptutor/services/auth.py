@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
-from deeptutor.multi_user.models import AccountPreset, Role
+from deeptutor.multi_user.models import USER_SCOPED_ROLES, VALID_ROLES, AccountPreset, Role
 from deeptutor.services.config import load_auth_settings, load_integrations_settings
 
 logger = logging.getLogger(__name__)
@@ -321,9 +321,8 @@ def set_role(username: str, role: str) -> bool:
     """
     Change the role for an existing user. Returns True on success.
 
-    Valid roles are the entries of ``VALID_ROLES`` (currently 'admin', 'user').
+    Valid roles are the entries of ``VALID_ROLES``.
     """
-    from deeptutor.multi_user.models import VALID_ROLES
 
     if role not in VALID_ROLES:
         raise ValueError(f"Invalid role: {role!r}. Must be one of {sorted(VALID_ROLES)}.")
@@ -486,7 +485,7 @@ def decode_token(token: str) -> TokenPayload | None:
             if deleted_identity_revoked(str(username), claimed_user_id):
                 return None
             role = str(payload.get("role") or "user")
-            if role != "user":
+            if role not in USER_SCOPED_ROLES:
                 return None
             user_id = claimed_user_id or str(username)
             current_version = 0
@@ -504,7 +503,7 @@ def decode_token(token: str) -> TokenPayload | None:
             if claimed_version != current_version:
                 return None
             role = str(record.get("role") or "user")
-            if role not in {"admin", "user"}:
+            if role not in VALID_ROLES:
                 return None
         device_credential_id = str(payload.get("dcid") or "")
         device_session_nonce = str(payload.get("dcs") or "")

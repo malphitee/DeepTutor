@@ -778,6 +778,17 @@
             "default": "",
             "title": "Search Mode",
             "type": "string"
+          },
+          "storage_workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Workspace Id"
           }
         },
         "required": [
@@ -2071,6 +2082,29 @@
         "title": "ConnectImaRequest",
         "type": "object"
       },
+      "ConnectKiwixRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "server_url": {
+            "title": "Server Url",
+            "type": "string"
+          },
+          "zim_name": {
+            "title": "Zim Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_url",
+          "zim_name",
+          "name"
+        ],
+        "title": "ConnectKiwixRequest",
+        "type": "object"
+      },
       "ConnectLightRagServerRequest": {
         "properties": {
           "api_key": {
@@ -2271,6 +2305,29 @@
           }
         },
         "title": "CreateBookRequest",
+        "type": "object"
+      },
+      "CreateCard": {
+        "additionalProperties": false,
+        "description": "A learner-authored task; identifiers and timestamps are server-owned.",
+        "properties": {
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "CreateCard",
         "type": "object"
       },
       "CreateCourseRequest": {
@@ -4322,6 +4379,24 @@
         "title": "InviteCreateRequest",
         "type": "object"
       },
+      "KiwixConnectionRequest": {
+        "properties": {
+          "server_url": {
+            "title": "Server Url",
+            "type": "string"
+          },
+          "zim_name": {
+            "title": "Zim Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_url",
+          "zim_name"
+        ],
+        "title": "KiwixConnectionRequest",
+        "type": "object"
+      },
       "KnowledgeBaseInfo": {
         "properties": {
           "assigned": {
@@ -4438,6 +4513,25 @@
           "statistics"
         ],
         "title": "KnowledgeBaseInfo",
+        "type": "object"
+      },
+      "KnowledgeMovePayload": {
+        "properties": {
+          "source_id": {
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "target_workspace_id": {
+            "default": "",
+            "title": "Target Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "title": "KnowledgeMovePayload",
         "type": "object"
       },
       "KnowledgePointInput": {
@@ -4562,6 +4656,7 @@
               "en",
               "zh",
               "fr",
+              "de",
               "uk"
             ],
             "title": "Language",
@@ -9771,6 +9866,76 @@
         "title": "TTSRequest",
         "type": "object"
       },
+      "TaskBoard": {
+        "description": "A consistent snapshot of the current workspace's board.",
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/TaskCard"
+            },
+            "title": "Cards",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cards"
+        ],
+        "title": "TaskBoard",
+        "type": "object"
+      },
+      "TaskCard": {
+        "additionalProperties": false,
+        "description": "Persisted card returned to the board, including archived cards.",
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "todo",
+              "doing",
+              "done"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "id",
+          "status",
+          "archived",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TaskCard",
+        "type": "object"
+      },
       "TestResponse": {
         "properties": {
           "error": {
@@ -10244,6 +10409,20 @@
             "default": false,
             "title": "Capability Once",
             "type": "boolean"
+          },
+          "client_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Submission Id"
           },
           "config": {
             "additionalProperties": true,
@@ -10831,6 +11010,7 @@
                   "en",
                   "zh",
                   "fr",
+                  "de",
                   "uk"
                 ],
                 "type": "string"
@@ -10858,7 +11038,8 @@
                   "it",
                   "ar",
                   "pl",
-                  "uk"
+                  "uk",
+                  "ms"
                 ],
                 "type": "string"
               },
@@ -10988,6 +11169,66 @@
           "block_id"
         ],
         "title": "UpdateBlockRequest",
+        "type": "object"
+      },
+      "UpdateCard": {
+        "additionalProperties": false,
+        "description": "Only supplied fields change, preserving concurrent edits to other fields.",
+        "properties": {
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "todo",
+                  "doing",
+                  "done"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "UpdateCard",
         "type": "object"
       },
       "UpdateCourseRequest": {
@@ -12664,6 +12905,39 @@
           }
         },
         "title": "YouTubeSettings",
+        "type": "object"
+      },
+      "ZimArticleImportRequest": {
+        "properties": {
+          "article_path": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Article Path",
+            "type": "string"
+          },
+          "kb_ref": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Kb Ref",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "workspace_id": {
+            "default": "",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kb_ref",
+          "article_path"
+        ],
+        "title": "ZimArticleImportRequest",
         "type": "object"
       },
       "deeptutor__api__routers__book__ProgressRequest": {
@@ -21096,6 +21370,84 @@
         ]
       }
     },
+    "/api/knowledge-bases/connect-kiwix": {
+      "post": {
+        "description": "Bind a KB to a kiwix-serve archive; no ingest or index is created.",
+        "operationId": "connect_kiwix_route_api_knowledge_bases_connect_kiwix_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectKiwixRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Connect Kiwix Route Api Knowledge Bases Connect Kiwix Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Connect Kiwix Route",
+        "tags": [
+          "knowledge-bases"
+        ]
+      }
+    },
     "/api/knowledge-bases/connect-lightrag-server": {
       "post": {
         "description": "Connect an external LightRAG server as a retrieval-only knowledge base.\n\nRe-probes server-side (never trusts the client's verdict), then registers a\npointer (``type: lightrag_server``). Retrieval is offloaded to the server's\n``/query`` endpoint — no copy, no local index.",
@@ -21731,6 +22083,186 @@
         ]
       }
     },
+    "/api/knowledge-bases/kiwix-articles": {
+      "get": {
+        "description": "List bounded article matches for Knowledge Center and Reading import.",
+        "operationId": "search_kiwix_articles_api_knowledge_bases_kiwix_articles_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kb_ref",
+            "required": true,
+            "schema": {
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Kb Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Search Kiwix Articles Api Knowledge Bases Kiwix Articles Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Kiwix Articles",
+        "tags": [
+          "knowledge-bases"
+        ]
+      }
+    },
+    "/api/knowledge-bases/kiwix-catalog": {
+      "get": {
+        "description": "List exact ZIM names from legacy OPDS; v2 can omit loaded archives.",
+        "operationId": "list_kiwix_catalog_api_knowledge_bases_kiwix_catalog_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "server_url",
+            "required": true,
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Server Url",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 100,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Kiwix Catalog Api Knowledge Bases Kiwix Catalog Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Kiwix Catalog",
+        "tags": [
+          "knowledge-bases"
+        ]
+      }
+    },
     "/api/knowledge-bases/list-ima": {
       "post": {
         "description": "List IMA knowledge bases without storing or echoing credentials.",
@@ -21950,6 +22482,84 @@
           }
         },
         "summary": "Probe Ima Route",
+        "tags": [
+          "knowledge-bases"
+        ]
+      }
+    },
+    "/api/knowledge-bases/probe-kiwix": {
+      "post": {
+        "description": "Verify that one archive is readable without copying its ZIM file.",
+        "operationId": "probe_kiwix_route_api_knowledge_bases_probe_kiwix_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KiwixConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Probe Kiwix Route Api Knowledge Bases Probe Kiwix Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Probe Kiwix Route",
         "tags": [
           "knowledge-bases"
         ]
@@ -25634,6 +26244,88 @@
           }
         },
         "summary": "Upload Files",
+        "tags": [
+          "knowledge-bases"
+        ]
+      }
+    },
+    "/api/knowledge-bases/{kb_name}/visual-assets/{asset_id}": {
+      "get": {
+        "description": "Serve a verified source image from an access checked local KB.",
+        "operationId": "serve_kb_visual_asset_api_knowledge_bases__kb_name__visual_assets__asset_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kb_name",
+            "required": true,
+            "schema": {
+              "title": "Kb Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serve Kb Visual Asset",
         "tags": [
           "knowledge-bases"
         ]
@@ -41874,6 +42566,84 @@
         ]
       }
     },
+    "/api/reading/library/import-zim-article": {
+      "post": {
+        "description": "Open one selected Kiwix article in Immersive Reading.\n\nOnly its bounded text snapshot enters the reading store.  The ZIM archive\nstays on the existing kiwix-serve instance, without bulk extraction.",
+        "operationId": "import_zim_article_api_reading_library_import_zim_article_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZimArticleImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Zim Article Api Reading Library Import Zim Article Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Zim Article",
+        "tags": [
+          "reading"
+        ]
+      }
+    },
     "/api/reading/library/materials": {
       "get": {
         "description": "Every material the owner has, with the collections holding each one.\n\nMembership travels with the row because the library view exists to answer\n\"where is this used, and what did I upload that is used nowhere\" — a\nquestion the client cannot ask one material at a time.",
@@ -53261,6 +54031,160 @@
         ]
       }
     },
+    "/api/settings/workspace/knowledge-bases/move": {
+      "post": {
+        "operationId": "move_knowledge_base_api_settings_workspace_knowledge_bases_move_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeMovePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Move Knowledge Base Api Settings Workspace Knowledge Bases Move Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move Knowledge Base",
+        "tags": [
+          "workspace-settings"
+        ]
+      }
+    },
+    "/api/settings/workspace/knowledge-bases/preview-move": {
+      "post": {
+        "operationId": "preview_knowledge_move_api_settings_workspace_knowledge_bases_preview_move_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeMovePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Knowledge Move Api Settings Workspace Knowledge Bases Preview Move Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Knowledge Move",
+        "tags": [
+          "workspace-settings"
+        ]
+      }
+    },
     "/api/settings/workspace/registrations": {
       "get": {
         "operationId": "list_workspaces_api_settings_workspace_registrations_get",
@@ -57567,6 +58491,233 @@
         "summary": "Update Check Settings",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/api/task-board": {
+      "get": {
+        "description": "Return active and archived cards in the current workspace.",
+        "operationId": "get_board_api_task_board_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskBoard"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Board",
+        "tags": [
+          "task-board"
+        ]
+      }
+    },
+    "/api/task-board/cards": {
+      "post": {
+        "description": "Create a task in the To do column.",
+        "operationId": "create_card_api_task_board_cards_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskBoard"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Card",
+        "tags": [
+          "task-board"
+        ]
+      }
+    },
+    "/api/task-board/cards/{card_id}": {
+      "patch": {
+        "description": "Edit, move, archive or restore an existing task.",
+        "operationId": "update_card_api_task_board_cards__card_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "card_id",
+            "required": true,
+            "schema": {
+              "title": "Card Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskBoard"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Card",
+        "tags": [
+          "task-board"
         ]
       }
     },

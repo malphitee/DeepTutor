@@ -1,5 +1,6 @@
 import { apiFetch, apiUrl } from "@/lib/api";
 import { invalidateAuthStatusCache } from "@/lib/auth";
+import type { AccountRole } from "@/lib/account-role";
 
 export interface LearnerProfile {
   age?: number;
@@ -37,7 +38,7 @@ export async function setOwnLearnerProfile(
 export interface ProfileInfo {
   id: string;
   username: string;
-  role: "admin" | "user";
+  role: AccountRole;
   created_at: string;
   disabled?: boolean;
   password_change_supported: boolean;

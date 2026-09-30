@@ -146,7 +146,7 @@ class ApplicationContainer:
         """
 
         from deeptutor.multi_user.identity import get_user_by_id
-        from deeptutor.multi_user.models import CurrentUser
+        from deeptutor.multi_user.models import USER_SCOPED_ROLES, CurrentUser
         from deeptutor.multi_user.paths import scope_for_user, user_context
 
         account = get_user_by_id(str(user_id))
@@ -167,7 +167,7 @@ class ApplicationContainer:
         # only turns already leased by other workers in the shared store run
         # to completion, bounded by their turn lifetime and revoked tokens.
         role = str(previous_role or record.get("role") or "user")
-        if role != "user":
+        if role not in USER_SCOPED_ROLES:
             return
         user = CurrentUser(
             id=str(user_id),
