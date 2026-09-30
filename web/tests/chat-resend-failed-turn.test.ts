@@ -26,7 +26,7 @@ test("ChatWorkspace wires resend props to ChatMessageList", () => {
   const workspace = source("features/chat/components/ChatWorkspace.tsx");
   assert.match(workspace, /resendLastMessage/);
   assert.match(workspace, /canResendLastTurn=\{state\.lastTurnFailed\}/);
-  assert.match(workspace, /onResendLastTurn=\{\(\) => resendLastMessage\(\)\}/);
+  assert.match(workspace, /onResendLastTurn=\{handleResendMessage\}/);
 });
 
 test("Resend translations exist in en and zh", () => {
