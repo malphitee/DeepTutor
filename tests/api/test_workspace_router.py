@@ -107,6 +107,12 @@ def partner_workspace_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return human
 
     monkeypatch.setattr(service_module, "get_path_service", scoped_path_service)
+    # The partner's scope root must contain its path service, as in production.
+    monkeypatch.setattr(
+        importlib.import_module("deeptutor.services.partners.scope"),
+        "get_partner_workspace",
+        lambda _partner_id: partner.workspace_root,
+    )
     monkeypatch.setattr(module, "get_content_workspace_service", ContentWorkspaceService)
     monkeypatch.setattr(module, "visible_partners", lambda: [{"partner_id": "math-bot"}])
     monkeypatch.setenv("DEEPTUTOR_HOME", str(tmp_path / "home"))
