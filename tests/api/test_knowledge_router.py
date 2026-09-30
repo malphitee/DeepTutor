@@ -69,6 +69,11 @@ def _build_app() -> FastAPI:
             "reading",
         ),
         (
+            "/api/knowledge-bases/demo/visual-assets/abc123",
+            "/api/knowledge-bases/{kb_name}/visual-assets/{asset_id}",
+            "reading",
+        ),
+        (
             "/api/knowledge-bases/demo/progress",
             "/api/knowledge-bases/{kb_name}/progress",
             "reading",

@@ -2314,6 +2314,26 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/knowledge-bases/{kb_name}/visual-assets/{asset_id}": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * Serve Kb Visual Asset
+     * @description Serve a verified source image from an access checked local KB.
+     */
+    readonly get: operations["serve_kb_visual_asset_api_knowledge_bases__kb_name__visual_assets__asset_id__get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/knowledge-bases/{kb_name}/web-source": {
     readonly parameters: {
       readonly query?: never;
@@ -2525,6 +2545,26 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/knowledge-bases/connect-kiwix": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Connect Kiwix Route
+     * @description Bind a KB to a kiwix-serve archive; no ingest or index is created.
+     */
+    readonly post: operations["connect_kiwix_route_api_knowledge_bases_connect_kiwix_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/knowledge-bases/connect-lightrag-server": {
     readonly parameters: {
       readonly query?: never;
@@ -2729,6 +2769,46 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/knowledge-bases/kiwix-articles": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * Search Kiwix Articles
+     * @description List bounded article matches for Knowledge Center and Reading import.
+     */
+    readonly get: operations["search_kiwix_articles_api_knowledge_bases_kiwix_articles_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/knowledge-bases/kiwix-catalog": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * List Kiwix Catalog
+     * @description List exact ZIM names from legacy OPDS; v2 can omit loaded archives.
+     */
+    readonly get: operations["list_kiwix_catalog_api_knowledge_bases_kiwix_catalog_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/knowledge-bases/list-ima": {
     readonly parameters: {
       readonly query?: never;
@@ -2791,6 +2871,26 @@ export interface paths {
      *     Creates nothing.
      */
     readonly post: operations["probe_ima_route_api_knowledge_bases_probe_ima_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/knowledge-bases/probe-kiwix": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Probe Kiwix Route
+     * @description Verify that one archive is readable without copying its ZIM file.
+     */
+    readonly post: operations["probe_kiwix_route_api_knowledge_bases_probe_kiwix_post"];
     readonly delete?: never;
     readonly options?: never;
     readonly head?: never;
@@ -6268,6 +6368,29 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/reading/library/import-zim-article": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Import Zim Article
+     * @description Open one selected Kiwix article in Immersive Reading.
+     *
+     *     Only its bounded text snapshot enters the reading store.  The ZIM archive
+     *     stays on the existing kiwix-serve instance, without bulk extraction.
+     */
+    readonly post: operations["import_zim_article_api_reading_library_import_zim_article_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/reading/library/materials": {
     readonly parameters: {
       readonly query?: never;
@@ -8685,6 +8808,40 @@ export interface paths {
     readonly patch?: never;
     readonly trace?: never;
   };
+  readonly "/api/settings/workspace/knowledge-bases/move": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /** Move Knowledge Base */
+    readonly post: operations["move_knowledge_base_api_settings_workspace_knowledge_bases_move_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/settings/workspace/knowledge-bases/preview-move": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /** Preview Knowledge Move */
+    readonly post: operations["preview_knowledge_move_api_settings_workspace_knowledge_bases_preview_move_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
   readonly "/api/settings/workspace/registrations": {
     readonly parameters: {
       readonly query?: never;
@@ -9654,6 +9811,66 @@ export interface paths {
     readonly options?: never;
     readonly head?: never;
     readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/task-board": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    /**
+     * Get Board
+     * @description Return active and archived cards in the current workspace.
+     */
+    readonly get: operations["get_board_api_task_board_get"];
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/task-board/cards": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    /**
+     * Create Card
+     * @description Create a task in the To do column.
+     */
+    readonly post: operations["create_card_api_task_board_cards_post"];
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    readonly patch?: never;
+    readonly trace?: never;
+  };
+  readonly "/api/task-board/cards/{card_id}": {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: never;
+      readonly path?: never;
+      readonly cookie?: never;
+    };
+    readonly get?: never;
+    readonly put?: never;
+    readonly post?: never;
+    readonly delete?: never;
+    readonly options?: never;
+    readonly head?: never;
+    /**
+     * Update Card
+     * @description Edit, move, archive or restore an existing task.
+     */
+    readonly patch: operations["update_card_api_task_board_cards__card_id__patch"];
     readonly trace?: never;
   };
   readonly "/api/tools": {
@@ -10727,6 +10944,8 @@ export interface components {
        * @default
        */
       readonly search_mode: string;
+      /** Storage Workspace Id */
+      readonly storage_workspace_id?: string | null;
     };
     /** Body_import_docx_api_documents_import_docx_post */
     readonly Body_import_docx_api_documents_import_docx_post: {
@@ -11316,6 +11535,15 @@ export interface components {
       /** Name */
       readonly name: string;
     };
+    /** ConnectKiwixRequest */
+    readonly ConnectKiwixRequest: {
+      /** Name */
+      readonly name: string;
+      /** Server Url */
+      readonly server_url: string;
+      /** Zim Name */
+      readonly zim_name: string;
+    };
     /** ConnectLightRagServerRequest */
     readonly ConnectLightRagServerRequest: {
       /**
@@ -11428,6 +11656,19 @@ export interface components {
        * @default
        */
       readonly user_intent: string;
+    };
+    /**
+     * CreateCard
+     * @description A learner-authored task; identifiers and timestamps are server-owned.
+     */
+    readonly CreateCard: {
+      /**
+       * Note
+       * @default
+       */
+      readonly note: string;
+      /** Title */
+      readonly title: string;
     };
     /** CreateCourseRequest */
     readonly CreateCourseRequest: {
@@ -12326,6 +12567,13 @@ export interface components {
        */
       readonly note: string;
     };
+    /** KiwixConnectionRequest */
+    readonly KiwixConnectionRequest: {
+      /** Server Url */
+      readonly server_url: string;
+      /** Zim Name */
+      readonly zim_name: string;
+    };
     /** KnowledgeBaseInfo */
     readonly KnowledgeBaseInfo: {
       /**
@@ -12370,6 +12618,16 @@ export interface components {
       /** Status */
       readonly status?: string | null;
     };
+    /** KnowledgeMovePayload */
+    readonly KnowledgeMovePayload: {
+      /** Source Id */
+      readonly source_id: string;
+      /**
+       * Target Workspace Id
+       * @default
+       */
+      readonly target_workspace_id: string;
+    };
     /** KnowledgePointInput */
     readonly KnowledgePointInput: {
       /**
@@ -12408,7 +12666,7 @@ export interface components {
        * Language
        * @enum {string}
        */
-      readonly language: "en" | "zh" | "fr" | "uk";
+      readonly language: "en" | "zh" | "fr" | "de" | "uk";
     };
     /** LearnerOverrideRequest */
     readonly LearnerOverrideRequest: {
@@ -14885,6 +15143,40 @@ export interface components {
       /** Updated */
       readonly updated: number;
     };
+    /**
+     * TaskBoard
+     * @description A consistent snapshot of the current workspace's board.
+     */
+    readonly TaskBoard: {
+      /** Cards */
+      readonly cards: readonly components["schemas"]["TaskCard"][];
+    };
+    /**
+     * TaskCard
+     * @description Persisted card returned to the board, including archived cards.
+     */
+    readonly TaskCard: {
+      /** Archived */
+      readonly archived: boolean;
+      /** Created At */
+      readonly created_at: string;
+      /** Id */
+      readonly id: string;
+      /**
+       * Note
+       * @default
+       */
+      readonly note: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      readonly status: "todo" | "doing" | "done";
+      /** Title */
+      readonly title: string;
+      /** Updated At */
+      readonly updated_at: string;
+    };
     /** TestResponse */
     readonly TestResponse: {
       /** Error */
@@ -15179,6 +15471,11 @@ export interface components {
        * @default false
        */
       readonly capability_once: boolean;
+      /**
+       * Client Submission Id
+       * @default null
+       */
+      readonly client_submission_id: string | null;
       /** Config */
       readonly config?: {
         readonly [key: string]: unknown;
@@ -15431,7 +15728,7 @@ export interface components {
       /** Code Block Wrap Long Lines */
       readonly code_block_wrap_long_lines?: boolean | null;
       /** Language */
-      readonly language?: ("en" | "zh" | "fr" | "uk") | null;
+      readonly language?: ("en" | "zh" | "fr" | "de" | "uk") | null;
       /** Response Language */
       readonly response_language?:
         | (
@@ -15449,6 +15746,7 @@ export interface components {
             | "ar"
             | "pl"
             | "uk"
+            | "ms"
           )
         | null;
       /** Sidebar Description */
@@ -15479,6 +15777,20 @@ export interface components {
       readonly expected_revision?: number | null;
       /** Page Id */
       readonly page_id: string;
+      /** Title */
+      readonly title?: string | null;
+    };
+    /**
+     * UpdateCard
+     * @description Only supplied fields change, preserving concurrent edits to other fields.
+     */
+    readonly UpdateCard: {
+      /** Archived */
+      readonly archived?: boolean | null;
+      /** Note */
+      readonly note?: string | null;
+      /** Status */
+      readonly status?: ("todo" | "doing" | "done") | null;
       /** Title */
       readonly title?: string | null;
     };
@@ -16151,6 +16463,23 @@ export interface components {
        */
       readonly transcript_provider: string;
     };
+    /** ZimArticleImportRequest */
+    readonly ZimArticleImportRequest: {
+      /** Article Path */
+      readonly article_path: string;
+      /** Kb Ref */
+      readonly kb_ref: string;
+      /**
+       * Title
+       * @default
+       */
+      readonly title: string;
+      /**
+       * Workspace Id
+       * @default
+       */
+      readonly workspace_id: string;
+    };
   };
   responses: never;
   parameters: never;
@@ -16270,6 +16599,8 @@ export type SchemaConnectFolderRequest =
   components["schemas"]["ConnectFolderRequest"];
 export type SchemaConnectImaRequest =
   components["schemas"]["ConnectImaRequest"];
+export type SchemaConnectKiwixRequest =
+  components["schemas"]["ConnectKiwixRequest"];
 export type SchemaConnectLightRagServerRequest =
   components["schemas"]["ConnectLightRagServerRequest"];
 export type SchemaConnectMarginNote4Request =
@@ -16282,6 +16613,7 @@ export type SchemaConnectWeKnoraRequest =
   components["schemas"]["ConnectWeKnoraRequest"];
 export type SchemaCreateBookRequest =
   components["schemas"]["CreateBookRequest"];
+export type SchemaCreateCard = components["schemas"]["CreateCard"];
 export type SchemaCreateCourseRequest =
   components["schemas"]["CreateCourseRequest"];
 export type SchemaCreateDocumentRequest =
@@ -16397,8 +16729,12 @@ export type SchemaInvidiousSettings =
   components["schemas"]["InvidiousSettings"];
 export type SchemaInviteCreateRequest =
   components["schemas"]["InviteCreateRequest"];
+export type SchemaKiwixConnectionRequest =
+  components["schemas"]["KiwixConnectionRequest"];
 export type SchemaKnowledgeBaseInfo =
   components["schemas"]["KnowledgeBaseInfo"];
+export type SchemaKnowledgeMovePayload =
+  components["schemas"]["KnowledgeMovePayload"];
 export type SchemaKnowledgePointInput =
   components["schemas"]["KnowledgePointInput"];
 export type SchemaKnowledgeType = components["schemas"]["KnowledgeType"];
@@ -16625,6 +16961,8 @@ export type SchemaSyncFolderResponse =
 export type SchemaSyncObjectIn = components["schemas"]["SyncObjectIn"];
 export type SchemaSyncRequest = components["schemas"]["SyncRequest"];
 export type SchemaSyncResponse = components["schemas"]["SyncResponse"];
+export type SchemaTaskBoard = components["schemas"]["TaskBoard"];
+export type SchemaTaskCard = components["schemas"]["TaskCard"];
 export type SchemaTestResponse = components["schemas"]["TestResponse"];
 export type SchemaTextPositionSelectorPayload =
   components["schemas"]["TextPositionSelectorPayload"];
@@ -16655,6 +16993,7 @@ export type SchemaUiSettingsUpdate = components["schemas"]["UISettingsUpdate"];
 export type SchemaUnitText = components["schemas"]["UnitText"];
 export type SchemaUpdateBlockRequest =
   components["schemas"]["UpdateBlockRequest"];
+export type SchemaUpdateCard = components["schemas"]["UpdateCard"];
 export type SchemaUpdateCourseRequest =
   components["schemas"]["UpdateCourseRequest"];
 export type SchemaUpdateDocumentRequest =
@@ -16721,6 +17060,8 @@ export type SchemaWorkspaceResources =
 export type SchemaWorkspaceUpdateRequest =
   components["schemas"]["WorkspaceUpdateRequest"];
 export type SchemaYouTubeSettings = components["schemas"]["YouTubeSettings"];
+export type SchemaZimArticleImportRequest =
+  components["schemas"]["ZimArticleImportRequest"];
 export type $defs = Record<string, never>;
 export interface operations {
   readonly root__get: {
@@ -21749,6 +22090,42 @@ export interface operations {
       };
     };
   };
+  readonly serve_kb_visual_asset_api_knowledge_bases__kb_name__visual_assets__asset_id__get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path: {
+        readonly asset_id: string;
+        readonly kb_name: string;
+      };
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly add_web_source_api_knowledge_bases__kb_name__web_source_post: {
     readonly parameters: {
       readonly query?: never;
@@ -22146,6 +22523,45 @@ export interface operations {
       };
     };
   };
+  readonly connect_kiwix_route_api_knowledge_bases_connect_kiwix_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["ConnectKiwixRequest"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly connect_lightrag_server_route_api_knowledge_bases_connect_lightrag_server_post: {
     readonly parameters: {
       readonly query?: never;
@@ -22465,6 +22881,82 @@ export interface operations {
       };
     };
   };
+  readonly search_kiwix_articles_api_knowledge_bases_kiwix_articles_get: {
+    readonly parameters: {
+      readonly query: {
+        readonly kb_ref: string;
+        readonly q: string;
+      };
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly list_kiwix_catalog_api_knowledge_bases_kiwix_catalog_get: {
+    readonly parameters: {
+      readonly query: {
+        readonly q?: string;
+        readonly server_url: string;
+      };
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly list_ima_route_api_knowledge_bases_list_ima_post: {
     readonly parameters: {
       readonly query?: never;
@@ -22563,6 +23055,45 @@ export interface operations {
         };
         content: {
           readonly "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly probe_kiwix_route_api_knowledge_bases_probe_kiwix_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["KiwixConnectionRequest"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
         };
       };
       /** @description Validation Error */
@@ -30686,6 +31217,45 @@ export interface operations {
       };
     };
   };
+  readonly import_zim_article_api_reading_library_import_zim_article_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["ZimArticleImportRequest"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly list_library_materials_api_reading_library_materials_get: {
     readonly parameters: {
       readonly query?: {
@@ -36184,6 +36754,84 @@ export interface operations {
       };
     };
   };
+  readonly move_knowledge_base_api_settings_workspace_knowledge_bases_move_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["KnowledgeMovePayload"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly preview_knowledge_move_api_settings_workspace_knowledge_bases_preview_move_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["KnowledgeMovePayload"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": {
+            readonly [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   readonly list_workspaces_api_settings_workspace_registrations_get: {
     readonly parameters: {
       readonly query?: never;
@@ -38241,6 +38889,115 @@ export interface operations {
           readonly "application/json": {
             readonly [key: string]: unknown;
           };
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly get_board_api_task_board_get: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody?: never;
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["TaskBoard"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly create_card_api_task_board_cards_post: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path?: never;
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["CreateCard"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 201: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["TaskBoard"];
+        };
+      };
+      /** @description Validation Error */
+      readonly 422: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readonly update_card_api_task_board_cards__card_id__patch: {
+    readonly parameters: {
+      readonly query?: never;
+      readonly header?: {
+        readonly Authorization?: string | null;
+      };
+      readonly path: {
+        readonly card_id: string;
+      };
+      readonly cookie?: {
+        readonly dt_token?: string | null;
+      };
+    };
+    readonly requestBody: {
+      readonly content: {
+        readonly "application/json": components["schemas"]["UpdateCard"];
+      };
+    };
+    readonly responses: {
+      /** @description Successful Response */
+      readonly 200: {
+        headers: {
+          readonly [name: string]: unknown;
+        };
+        content: {
+          readonly "application/json": components["schemas"]["TaskBoard"];
         };
       };
       /** @description Validation Error */

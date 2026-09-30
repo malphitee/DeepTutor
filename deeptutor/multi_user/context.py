@@ -5,7 +5,13 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from typing import Any
 
-from .models import LOCAL_ADMIN_ID, LOCAL_ADMIN_USERNAME, CurrentUser
+from .models import (
+    LOCAL_ADMIN_ID,
+    LOCAL_ADMIN_USERNAME,
+    USER_SCOPED_ROLES,
+    VALID_ROLES,
+    CurrentUser,
+)
 from .paths import local_admin_user, scope_for_user
 
 _current_user: ContextVar[CurrentUser | None] = ContextVar("deeptutor_current_user", default=None)
@@ -78,9 +84,9 @@ def user_from_token_payload(payload: Any | None) -> CurrentUser:
         is_local_admin_identity = user_id == LOCAL_ADMIN_ID or (
             not user_id and username == LOCAL_ADMIN_USERNAME
         )
-        if not POCKETBASE_ENABLED and not is_local_admin_identity and role != "user":
+        if not POCKETBASE_ENABLED and not is_local_admin_identity and role not in USER_SCOPED_ROLES:
             raise PermissionError("This account cannot hold the requested role")
-    if role not in {"admin", "user"}:
+    if role not in VALID_ROLES:
         role = "user"
     if not user_id:
         user_id = "local-admin" if role == "admin" and username == "local" else username
