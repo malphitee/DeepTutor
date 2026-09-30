@@ -27,6 +27,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
+from starlette.routing import compile_path
 
 from deeptutor.services.config import load_auth_settings
 
@@ -755,6 +756,25 @@ _LEARNER_KB_READ_ROUTES = frozenset(
         "/api/knowledge-bases/{kb_name}/progress",
     }
 )
+_LEARNER_KB_READ_ROUTE_PATTERNS = tuple(
+    (template, compile_path(template)[0]) for template in sorted(_LEARNER_KB_READ_ROUTES)
+)
+
+
+def _learner_kb_read_route(path: str, route_path: str | None) -> bool:
+    """Whether the resolved route is one of the learner KB read templates.
+
+    Older FastAPI copies included routes with the prefix applied, so the
+    resolved template is absolute. Newer releases resolve the router's own
+    route, whose template omits the include prefix. Accept a full template only
+    when it ends with the resolved one and the request path matches it fully.
+    """
+    if not route_path or not route_path.startswith("/"):
+        return False
+    return any(
+        template.endswith(route_path) and pattern.fullmatch(path)
+        for template, pattern in _LEARNER_KB_READ_ROUTE_PATTERNS
+    )
 
 
 def _learning_surface_for_path(
@@ -780,7 +800,7 @@ def _learning_surface_for_path(
     if (
         method.upper() == "GET"
         and (normalized == "/api/knowledge-bases" or normalized.startswith("/api/knowledge-bases/"))
-        and route_path in _LEARNER_KB_READ_ROUTES
+        and _learner_kb_read_route(normalized, route_path)
     ):
         return "reading"
     return ""

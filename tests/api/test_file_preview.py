@@ -25,19 +25,14 @@ def test_preview_route_requires_authentication(monkeypatch) -> None:
     from deeptutor.api.main import app
     from deeptutor.api.routers import auth
 
-    routes = [
-        route for route in app.routes if getattr(route, "path", "") == "/api/file-preview/pdf"
-    ]
-    assert len(routes) == 2  # GET source and POST uploaded bytes
-    assert all(
-        any(dependency.call is auth.require_auth for dependency in route.dependant.dependencies)
-        for route in routes
-    )
+    # Exercise both methods through routing; newer FastAPI releases keep
+    # included routers nested, so ``app.routes`` no longer lists them.
     monkeypatch.setattr(auth, "AUTH_ENABLED", True)
-    response = TestClient(app).get(
-        "/api/file-preview/pdf", params={"source": "/files/outputs/report.docx"}
-    )
+    client = TestClient(app)
+    response = client.get("/api/file-preview/pdf", params={"source": "/files/outputs/report.docx"})
     assert response.status_code == 401
+    uploaded = client.post("/api/file-preview/pdf", files={"file": ("report.docx", b"office")})
+    assert uploaded.status_code == 401
 
 
 def test_source_url_must_be_local_and_workspace_scope_must_match(
