@@ -5,9 +5,7 @@ from __future__ import annotations
 import pytest
 
 
-def test_role_change_rejects_old_token_and_uses_current_role(
-    mu_isolated_root, monkeypatch
-) -> None:
+def test_role_change_rejects_old_token_and_uses_current_role(mu_isolated_root, monkeypatch) -> None:
     from deeptutor.multi_user import identity
     from deeptutor.services import auth
 

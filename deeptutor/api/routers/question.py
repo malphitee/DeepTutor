@@ -395,9 +395,7 @@ async def websocket_question_generate(websocket: WebSocket):
         current_user = get_current_user()
         path_service = get_path_service()
         scope_key = str(path_service.workspace_root.resolve())
-        task_key = (
-            f"question_{current_user.id}_{scope_key}_{kb_name}_{hash(str(requirement))}"
-        )
+        task_key = f"question_{current_user.id}_{scope_key}_{kb_name}_{hash(str(requirement))}"
         task_id = task_manager.generate_task_id(
             "question_gen",
             task_key,

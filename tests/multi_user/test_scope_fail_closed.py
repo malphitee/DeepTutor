@@ -24,9 +24,7 @@ def test_active_request_does_not_use_rag_admin_fallback(mu_isolated_root, monkey
     def fail_scope_resolution():
         raise PermissionError("missing request scope")
 
-    monkeypatch.setattr(
-        "deeptutor.services.path_service.get_path_service", fail_scope_resolution
-    )
+    monkeypatch.setattr("deeptutor.services.path_service.get_path_service", fail_scope_resolution)
     token = _request_active.set(True)
     try:
         with pytest.raises(PermissionError, match="missing request scope"):
@@ -136,17 +134,18 @@ def test_public_output_root_symlink_is_rejected(mu_isolated_root, as_user, tmp_p
         chat_dir = workspace / "chat" / "chat"
         chat_dir.mkdir(parents=True, exist_ok=True)
         (chat_dir / "evil").symlink_to(outside, target_is_directory=True)
-        assert get_path_service().resolve_public_output_path(
-            "workspace/chat/chat/evil/media.png"
-        ) is None
+        assert (
+            get_path_service().resolve_public_output_path("workspace/chat/chat/evil/media.png")
+            is None
+        )
 
 
 def test_attachment_branch_symlink_is_rejected(mu_isolated_root, as_user, tmp_path):
+    from deeptutor.services.path_service import get_path_service
     from deeptutor.services.storage.attachment_store import (
         get_attachment_store,
         reset_attachment_store,
     )
-    from deeptutor.services.path_service import get_path_service
 
     outside = tmp_path / "other-user-attachments"
     outside.mkdir()
@@ -166,11 +165,11 @@ def test_attachment_branch_symlink_is_rejected(mu_isolated_root, as_user, tmp_pa
 
 
 def test_file_library_branch_symlink_is_rejected(mu_isolated_root, as_user, tmp_path):
+    from deeptutor.services.path_service import get_path_service
     from deeptutor.services.storage.file_library import (
         get_file_library_store,
         reset_file_library_store,
     )
-    from deeptutor.services.path_service import get_path_service
 
     outside = tmp_path / "other-user-library"
     outside.mkdir()
@@ -187,9 +186,7 @@ def test_file_library_branch_symlink_is_rejected(mu_isolated_root, as_user, tmp_
             reset_file_library_store()
 
 
-def test_persisted_linked_kb_pointer_cannot_escape_user_scope(
-    mu_isolated_root, as_user, tmp_path
-):
+def test_persisted_linked_kb_pointer_cannot_escape_user_scope(mu_isolated_root, as_user, tmp_path):
     from deeptutor.knowledge.manager import KnowledgeBaseManager
     from deeptutor.services.path_service import get_path_service
 
@@ -313,9 +310,7 @@ def test_admin_can_use_direct_manim_execution(mu_isolated_root, as_user):
         assert_manim_execution_allowed()
 
 
-def test_ordinary_exec_is_rejected_before_workspace_mutation(
-    mu_isolated_root, as_user, tmp_path
-):
+def test_ordinary_exec_is_rejected_before_workspace_mutation(mu_isolated_root, as_user, tmp_path):
     import asyncio
 
     from deeptutor.tools.exec_tool import ExecTool

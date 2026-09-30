@@ -23,11 +23,11 @@ from deeptutor.capabilities.subagent import (
 )
 from deeptutor.capabilities.subagent import binding as subagent_binding
 from deeptutor.core.context import TurnRuntimeContext, UnifiedContext
+from deeptutor.multi_user.context import reset_current_user, set_current_user
+from deeptutor.multi_user.models import CurrentUser, UserScope
 from deeptutor.runtime.registry.tool_registry import get_tool_registry
 from deeptutor.services.subagent.config import BackendConfig
 from deeptutor.services.subagent.types import ConsultResult, SubagentEvent
-from deeptutor.multi_user.context import reset_current_user, set_current_user
-from deeptutor.multi_user.models import CurrentUser, UserScope
 
 
 def _bind(monkeypatch, *, kind: str = "claude_code", cwd: str = "", name: str = "myagent") -> None:

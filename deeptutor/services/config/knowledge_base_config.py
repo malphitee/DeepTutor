@@ -13,6 +13,7 @@ from deeptutor.services.rag.factory import (
     has_ready_provider_index,
     normalize_provider_name,
 )
+
 logger = logging.getLogger(__name__)
 
 # Legacy fallback only — frozen at admin scope at import time. Production code
@@ -74,13 +75,9 @@ class KnowledgeBaseConfigService:
         raw_default_kb = defaults.get("default_kb")
         if raw_default_kb is not None:
             try:
-                defaults["default_kb"] = validate_knowledge_base_name(
-                    str(raw_default_kb)
-                )
+                defaults["default_kb"] = validate_knowledge_base_name(str(raw_default_kb))
             except ValueError:
-                logger.warning(
-                    "Ignoring invalid default knowledge-base name %r", raw_default_kb
-                )
+                logger.warning("Ignoring invalid default knowledge-base name %r", raw_default_kb)
                 defaults["default_kb"] = None
 
         knowledge_bases = payload.setdefault("knowledge_bases", {})

@@ -157,6 +157,7 @@ async def unified_websocket(ws: WebSocket) -> None:
         if await turns.get_turn(turn_id) is None:
             await send_error("Turn not found.", error_code="turn_not_found", turn_id=turn_id)
             return
+
         async def _forward() -> None:
             try:
                 async for event in turns.subscribe_turn(turn_id, after_seq=after_seq):
@@ -177,8 +178,11 @@ async def unified_websocket(ws: WebSocket) -> None:
 
     async def subscribe_session(session_id: str, after_seq: int = 0) -> None:
         if await turns.get_session(session_id) is None:
-            await send_error("Session not found.", error_code="session_not_found", session_id=session_id)
+            await send_error(
+                "Session not found.", error_code="session_not_found", session_id=session_id
+            )
             return
+
         async def _forward() -> None:
             try:
                 async for event in turns.subscribe_session(session_id, after_seq=after_seq):
