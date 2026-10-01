@@ -172,6 +172,20 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 COPY --from=python-base /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=python-base /usr/local/bin /usr/local/bin
 
+# Bake tiktoken's vocabularies into the image. tiktoken downloads them from
+# openaipublic.blob.core.windows.net on first use, and its default cache sits
+# in /tmp, which every container recreate wipes — so each upgrade re-fetched
+# them at runtime (37-81s from mainland China). cl100k_base serves chat token
+# counting; o200k_base serves deep research's gpt-4o fallback. The directory
+# is sticky-writable like /tmp: an explicit TIKTOKEN_CACHE_DIR makes tiktoken
+# raise instead of skipping when it cannot cache another encoding, and the
+# entrypoint may remap the runtime UID.
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+RUN mkdir -p "$TIKTOKEN_CACHE_DIR" \
+    && python -c "import tiktoken; [tiktoken.get_encoding(n) for n in ('cl100k_base', 'o200k_base')]" \
+    && chmod 1777 "$TIKTOKEN_CACHE_DIR" \
+    && ls -l "$TIKTOKEN_CACHE_DIR"
+
 # Copy built frontend from frontend-builder stage (standalone mode)
 # The standalone output contains a self-contained server.js + minimal node_modules
 # Static assets and public/ must be copied alongside standalone manually
