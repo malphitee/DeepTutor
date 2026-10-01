@@ -284,6 +284,10 @@ class TurnLifecycle:
                 if time.monotonic() >= renew_at:
                     renewed = await self.coordinator.renew_turn(lease)
                     if renewed is None:
+                        logger.warning(
+                            "Turn %s lost its owner lease (renewal rejected); cancelling it",
+                            execution.turn_id,
+                        )
                         execution.lease_lost = True
                         if execution.task is not None:
                             execution.task.cancel()
@@ -298,6 +302,11 @@ class TurnLifecycle:
             # Continuing without a provable lease risks split-brain. Stop the
             # Python coroutine; the leader recovery service writes the durable
             # retryable failure after Redis becomes available again.
+            logger.warning(
+                "Lease coordination failed for turn %s; cancelling it",
+                execution.turn_id,
+                exc_info=True,
+            )
             execution.lease_lost = True
             if execution.task is not None:
                 execution.task.cancel()

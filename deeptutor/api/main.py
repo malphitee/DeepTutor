@@ -333,6 +333,11 @@ async def lifespan(app: FastAPI):
     app.state.background_supervisor = background_supervisor
     await background_supervisor.start()
 
+    from deeptutor.runtime.loop_watchdog import EventLoopWatchdog
+
+    loop_watchdog = EventLoopWatchdog(asyncio.get_running_loop())
+    loop_watchdog.start()
+
     # Ping PocketBase if configured — logs a warning (not an error) if unreachable
     try:
         from deeptutor.services.pocketbase_client import ping_pocketbase
@@ -368,6 +373,8 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown")
 
     install_progress_ports(broadcast=None, emit_task_event=None)
+
+    loop_watchdog.stop()
 
     try:
         await background_supervisor.close()

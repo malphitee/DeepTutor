@@ -52,6 +52,11 @@ class TurnRecoveryService:
             TurnStatus.WAITING_INPUT.value,
         }:
             return False
+        logger.warning(
+            "Turn %s outlived its owner lease while %s; failing it as worker_lost",
+            turn_id,
+            turn.get("status"),
+        )
         await self.coordinator.publish_event(
             turn_id,
             {

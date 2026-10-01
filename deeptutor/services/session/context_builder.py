@@ -95,6 +95,16 @@ def _load_token_encoding_synchronously() -> Any | None:
     return _load_token_encoding()
 
 
+def token_counter_name() -> str:
+    """Name of the tokenizer ``count_tokens`` currently uses, without loading it.
+
+    Reports the shared encoder's state instead of probing tiktoken: a probe's
+    first call may download the vocabulary synchronously, which on an event
+    loop stalls every turn and lets the owner lease expire (``worker_lost``).
+    """
+    return "cl100k_base" if _TOKEN_ENCODING is not None else "heuristic"
+
+
 def count_tokens(text: str) -> int:
     """Estimate tokens without cold-loading tiktoken on an event loop.
 

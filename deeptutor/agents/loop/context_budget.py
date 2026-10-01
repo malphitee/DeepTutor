@@ -107,17 +107,16 @@ def resolve_window_info(
 def detect_counter_name() -> str:
     """Name of the tokenizer ``count_tokens`` will actually use in this process.
 
-    ``count_tokens`` swallows a missing or broken tiktoken and silently drops to
-    a chars/4 estimate; probing the same import keeps the reported counter from
-    claiming an accuracy the numbers do not have.
+    ``count_tokens`` swallows a missing, broken or still-loading tiktoken and
+    silently drops to a chars/4 estimate; reading its shared encoder state keeps
+    the reported counter from claiming an accuracy the numbers do not have.
+    This runs on the event loop after every chat turn, so it must never load
+    tiktoken itself.
     """
-    try:
-        import tiktoken
+    # Imported lazily for the same cycle reason as ``_default_counter``.
+    from deeptutor.services.session.context_builder import token_counter_name
 
-        tiktoken.get_encoding("cl100k_base")
-    except Exception:
-        return "heuristic"
-    return "cl100k_base"
+    return token_counter_name()
 
 
 def count_conversation_tokens(
@@ -228,9 +227,9 @@ def _build(
         "used_tokens": used,
         "free_tokens": max(0, window.window - used),
         "model": model,
-        # Probed, not derived from ``counter``: the parameter exists so tests can
-        # inject a deterministic stand-in, and production always takes the
-        # default, so the probe and the counter in use are the same thing there.
+        # Read from the shared encoder, not derived from ``counter``: the
+        # parameter exists so tests can inject a deterministic stand-in, and
+        # production always takes the default, so they are the same thing there.
         "counter": detect_counter_name(),
         "deferred_tool_count": max(0, int(deferred_tool_count)),
         "segments": segments,

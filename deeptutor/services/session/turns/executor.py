@@ -192,6 +192,10 @@ class TurnExecutor:
                 ),
             )
             if not entered_waiting:
+                logger.warning(
+                    "Turn %s could not pause for user input (it is no longer running)",
+                    execution.turn_id,
+                )
                 execution.lease_lost = self.coordinator is not None
                 raise asyncio.CancelledError
             execution.awaiting_user_reply = True
@@ -1171,6 +1175,11 @@ class TurnExecutor:
                 retryable=retryable,
             )
             if not transitioned:
+                logger.warning(
+                    "Turn %s could not record its %s status; this execution no longer owns it",
+                    turn_id,
+                    turn_status,
+                )
                 execution.lease_lost = True
                 raise asyncio.CancelledError
             await self._publish_live_event(execution, pending_done_event)

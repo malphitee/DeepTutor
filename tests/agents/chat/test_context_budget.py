@@ -308,6 +308,27 @@ def test_malformed_material_degrades_to_no_budget() -> None:
     assert build_context_budget(blocks=None, request=LLMRequestSnapshot()) is None  # type: ignore[arg-type]
 
 
+@pytest.mark.asyncio
+async def test_counter_name_never_cold_loads_tiktoken_on_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cold ``get_encoding`` may download the vocabulary for over a minute.
+
+    Run on the event loop after every chat turn, that stall starved the lease
+    renewal and the turn was failed as ``worker_lost``.
+    """
+    from deeptutor.services.session import context_builder
+
+    loads: list[str] = []
+    monkeypatch.setattr("tiktoken.get_encoding", loads.append)
+    monkeypatch.setattr(context_builder, "_TOKEN_ENCODING", None, raising=False)
+    assert _budget()["counter"] == "heuristic"
+
+    monkeypatch.setattr(context_builder, "_TOKEN_ENCODING", object(), raising=False)
+    assert _budget()["counter"] == "cl100k_base"
+    assert loads == []
+
+
 # ---- end to end ----------------------------------------------------------
 
 
