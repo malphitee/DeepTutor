@@ -81,6 +81,11 @@ class VersionCheckResult:
 
     @property
     def update_available(self) -> bool:
+        # Development images report their channel (``dev``) instead of a release
+        # version. They follow a branch rather than releases, so no release
+        # counts as newer — and comparing would raise on every About-page poll.
+        if _CURRENT_VERSION.match(self.current_version.strip()) is None:
+            return False
         return _version_tuple(self.release.version) > _version_tuple(self.current_version)
 
 

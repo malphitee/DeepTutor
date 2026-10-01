@@ -56,6 +56,24 @@ async def test_version_check_caches_success_for_the_ttl() -> None:
 
 
 @pytest.mark.asyncio
+async def test_development_image_never_reports_an_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``dev`` images inject their channel name, not a release version."""
+    monkeypatch.setenv("DEEPTUTOR_APP_VERSION", "dev")
+    service = VersionCheckService(
+        client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=_release()))
+        ),
+    )
+
+    result = await service.check()
+
+    assert result.current_version == "dev"
+    assert result.update_available is False
+
+
+@pytest.mark.asyncio
 async def test_version_check_falls_back_to_latest_redirect_when_api_is_rate_limited() -> None:
     requests: list[tuple[str, str]] = []
 
